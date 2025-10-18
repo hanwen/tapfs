@@ -108,12 +108,17 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 	if s.Debug {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		f, err := os.Create(filepath.Join(s.depDir, fmt.Sprintf("%s.log", od.id)))
-		if err != nil {
-			return err
+
+		if s.debugLog != nil {
+			log.Printf("already have a debug log. Are you using -j1 ?")
+		} else {
+			f, err := os.Create(filepath.Join(s.depDir, fmt.Sprintf("%s.log", od.id)))
+			if err != nil {
+				return err
+			}
+			s.debugLog = f
+			log.SetOutput(f)
 		}
-		s.debugLog = f
-		log.SetOutput(f)
 	}
 
 	return nil
@@ -141,9 +146,13 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	if s.Debug {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		log.SetOutput(os.Stderr)
-		s.debugLog.Close()
-		s.debugLog = nil
+		if s.debugLog != nil {
+			log.SetOutput(os.Stderr)
+			s.debugLog.Close()
+			s.debugLog = nil
+		} else {
+			log.Printf("EndTrace called, but debugLog == nil")
+		}
 	}
 	return nil
 }
