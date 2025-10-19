@@ -12,7 +12,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -78,7 +80,9 @@ func FindSocket(startDir string) (socket string, topdir string, err error) {
 }
 
 type TraceRequest struct {
-	PGID int
+	PGID    int
+	Inputs  []string
+	Outputs []string
 }
 
 type TraceResponse struct {
@@ -167,6 +171,8 @@ func newSocket() (net.Listener, string, error) {
 	return l, s, err
 }
 
+var ioRegex = regexp.MustCompile(`^ninja_inputs='([^']*)' ninja_outputs='([^']*)'; `)
+
 // Runs a command on the server for use in the command-line program
 func ClientRun(socket string, commandline string, env []string, dir string) error {
 	client, err := rpc.Dial("unix", socket)
@@ -179,7 +185,15 @@ func ClientRun(socket string, commandline string, env []string, dir string) erro
 		return err
 	}
 
+	groups := ioRegex.FindStringSubmatch(commandline)
 	req := TraceRequest{PGID: pid}
+
+	if groups != nil {
+		req.Inputs = strings.Split(strings.TrimSpace(groups[1]), " ")
+		req.Outputs = strings.Split(strings.TrimSpace(groups[2]), " ")
+		commandline = commandline[len(groups[0]):]
+	}
+
 	var rep TraceResponse
 	if err := client.Call("CommandServer.StartTrace", &req, &rep); err != nil {
 		return err
