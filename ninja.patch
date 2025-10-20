@@ -1,0 +1,63 @@
+diff --git a/src/graph.cc b/src/graph.cc
+index b6cc1f4..748b8d2 100644
+--- a/src/graph.cc
++++ b/src/graph.cc
+@@ -499,7 +499,20 @@ std::string EdgeEnv::MakePathList(const Node* const* const span,
+ }
+ 
+ std::string Edge::EvaluateCommand(const bool incl_rsp_file) const {
+-  string command = GetBinding("command");
++  string command="ninja_inputs='";
++
++  for (Node *p : inputs_) {
++    command += p->path();
++    command += " ";
++  }
++  command += "'; ninja_outputs='";
++  for (Node *p : outputs_) {
++    command += p->path();
++    command += " ";
++  }
++  command += "'; ";
++  
++  command += GetBinding("command");
+   if (incl_rsp_file) {
+     string rspfile_content = GetBinding("rspfile_content");
+     if (!rspfile_content.empty())
+diff --git a/src/subprocess-posix.cc b/src/subprocess-posix.cc
+index 0e62b3b..875c28e 100644
+--- a/src/subprocess-posix.cc
++++ b/src/subprocess-posix.cc
+@@ -37,6 +37,21 @@ extern char** environ;
+ 
+ using namespace std;
+ 
++string ninja_shell;
++
++class Initter {
++public:
++  Initter() {
++    ninja_shell = "/bin/sh";
++    if (char *p = getenv("NINJA_SHELL")) {
++      ninja_shell = p;
++    }
++  }
++};
++
++Initter initter;
++
++
+ namespace {
+   ExitStatus ParseExitStatus(int status);
+ }
+@@ -129,8 +144,8 @@ bool Subprocess::Start(SubprocessSet* set, const string& command) {
+   if (err != 0)
+     Fatal("posix_spawnattr_setflags: %s", strerror(err));
+ 
+-  const char* spawned_args[] = { "/bin/sh", "-c", command.c_str(), NULL };
+-  err = posix_spawn(&pid_, "/bin/sh", &action, &attr,
++  const char* spawned_args[] = { ninja_shell.c_str(), "-c", command.c_str(), NULL };
++  err = posix_spawn(&pid_, ninja_shell.c_str(), &action, &attr,
+         const_cast<char**>(spawned_args), environ);
+   if (err != 0)
+     Fatal("posix_spawn: %s", strerror(err));

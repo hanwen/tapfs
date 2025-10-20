@@ -15,7 +15,7 @@ import (
 func main() {
 	debug := flag.Bool("debug", false, "debug")
 	origDir := flag.String("backing", "", "backing dir")
-	depDir := flag.String("depdir", "", "dep dir")
+	depDir := flag.String("database", "", "database dir")
 	flag.Parse()
 	if flag.NArg() == 0 {
 		log.Fatal("must specify mount dir")
