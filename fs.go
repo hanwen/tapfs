@@ -108,6 +108,7 @@ func (od *openData) record(path string, op operation) {
 		}
 	}
 	od.ops[op][path] = struct{}{}
+	delete(od.ops[opDelete], path)
 }
 
 type TapFSRoot struct {
