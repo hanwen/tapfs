@@ -1,7 +1,7 @@
 DEMO
 ====
 
-Dependencies of a make build
+Dependencies of a make build; build caching.
 
 Caching
 =======
@@ -46,3 +46,12 @@ google-chrome http://localhost:6710/
 # edit src/ninja.cc ; update --help msg
 ```
 
+
+TODO
+====
+
+* run server as root for backing FDs.
+
+* symlinks.
+
+* tests
