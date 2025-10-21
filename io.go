@@ -30,6 +30,12 @@ type hashKey struct {
 	Size int64
 }
 
+func (k *hashKey) FromStat(st *syscall.Stat_t) {
+	k.Ino = st.Ino
+	k.Mtim = st.Mtim
+	k.Size = st.Size
+}
+
 // CommandServer serves RPC calls
 type CommandServer struct {
 	root     *TapFSRoot
@@ -175,7 +181,8 @@ func (s *CommandServer) hashForPath(p string) (string, error) {
 		return "", err
 	}
 
-	key := hashKey{Ino: st.Ino, Mtim: st.Mtim, Size: st.Size}
+	var key hashKey
+	key.FromStat(&st)
 	s.mu.Lock()
 	h, ok := s.hashes[key]
 	s.mu.Unlock()
@@ -369,20 +376,20 @@ func (s *CommandServer) checkActionCache(req *TraceRequest) error {
 		return acNotFound
 	}
 
-	log.Printf("cache hit for: %s", req.Command)
-
 	for in, inH := range val.Inputs {
 		if _, ok := inHash[in]; ok {
 			continue
 		}
 
 		if h, err := s.hashForPath(in); err != nil {
-			return fmt.Errorf("hashForPath: %v", err)
+			// don't propagate. Maybe ENOENT
+			return nil
 		} else if h != inH {
 			log.Printf("cache miss due to undeclared dep %q", in)
 			return nil
 		}
 	}
+	log.Printf("cache hit for: %s", req.Command)
 
 	return s.fromActionCache(val)
 }
@@ -398,10 +405,22 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 		if err != nil {
 			return err
 		}
-
+		defer f.Close()
 		if _, err := io.Copy(f, r); err != nil {
 			return err
 		}
+
+		var st syscall.Stat_t
+		if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
+			return err
+		}
+
+		var k hashKey
+		k.FromStat(&st)
+
+		s.mu.Lock()
+		s.hashes[k] = outHash
+		s.mu.Unlock()
 
 		if err := f.Close(); err != nil {
 			return err
