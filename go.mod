@@ -1,7 +1,11 @@
 module tapfs
 
-go 1.18
+go 1.21
 
-require github.com/hanwen/go-fuse/v2 v2.4.1
+toolchain go1.24.9
 
-require golang.org/x/sys v0.13.0 // indirect
+require (
+	github.com/google/go-cmp v0.7.0
+	github.com/hanwen/go-fuse/v2 v2.9.0
+	golang.org/x/sys v0.28.0 // indirect
+)

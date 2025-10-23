@@ -30,7 +30,7 @@ type operation int
 type openData struct {
 	id  string
 	mu  sync.Mutex
-	ops [opCount]map[string]struct{}
+	ops map[string]operation
 }
 
 func (r *TapFSRoot) registerPGID(pgid int) *openData {
@@ -42,12 +42,10 @@ func (r *TapFSRoot) registerPGID(pgid int) *openData {
 		ns := r.lastID + 1
 		r.lastID = ns
 		od = &openData{
-			id: fmt.Sprintf("%d", ns),
+			id:  fmt.Sprintf("%d", ns),
+			ops: map[string]operation{},
 		}
 
-		for i := 0; i < opCount; i++ {
-			od.ops[i] = map[string]struct{}{}
-		}
 		r.openDataByPGID[pgid] = od
 	}
 	return od
@@ -90,25 +88,22 @@ func (od *openData) record(path string, op operation) {
 
 	od.mu.Lock()
 	defer od.mu.Unlock()
-	if op == opRead {
-		if _, ok := od.ops[opCreate][path]; ok {
-			return
+
+	update(op, od.ops, path)
+}
+
+func update(op operation, ops map[string]operation, path string) {
+	before := ops[path]
+	if before == opCreate {
+		if op == opDelete {
+			delete(ops, path)
 		}
-	} else if op == opDelete {
-		if _, ok := od.ops[opCreate][path]; ok {
-			delete(od.ops[opCreate], path)
-			return
-		}
-		if _, ok := od.ops[opUpdate][path]; ok {
-			delete(od.ops[opUpdate], path)
-		}
-	} else if op == opUpdate {
-		if _, ok := od.ops[opCreate][path]; ok {
-			return
-		}
+		return
 	}
-	od.ops[op][path] = struct{}{}
-	delete(od.ops[opDelete], path)
+	if op == opRead && before == opUpdate {
+		return
+	}
+	ops[path] = op
 }
 
 type TapFSRoot struct {
@@ -167,14 +162,14 @@ func context2pgid(ctx context.Context) int {
 }
 
 func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	fh, flags, errno := n.LoopbackNode.Open(ctx, flags)
+	fh, retFlags, errno := n.LoopbackNode.Open(ctx, flags)
 
 	op := opRead
-	if (flags & (syscall.O_TRUNC | syscall.O_RDWR | syscall.O_WRONLY)) != 0 {
+	if (flags & (syscall.O_APPEND | syscall.O_TRUNC | syscall.O_RDWR | syscall.O_WRONLY)) != 0 {
 		op = opUpdate
 	}
 	n.root().openData(context2pgid(ctx)).record(n.Path(nil), op)
-	return fh, flags, errno
+	return fh, retFlags, errno
 }
 
 func (n *TapFSNode) Getxattr(ctx context.Context, attr string, dest []byte) (uint32, syscall.Errno) {

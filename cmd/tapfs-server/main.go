@@ -45,9 +45,11 @@ func main() {
 	}
 	log.Println("mounted!")
 
-	if err := tapfs.StartCommandServer(root, *depDir, server, *debug); err != nil {
+	cserv, err := tapfs.NewCommandServer(root, *depDir, server, *debug)
+	if err != nil {
 		log.Fatal(err)
 	}
+	defer cserv.Close()
 
 	server.WaitMount()
 	// trigger ENOSYS

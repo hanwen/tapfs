@@ -1,0 +1,88 @@
+package tapfs
+
+import (
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+	"github.com/hanwen/go-fuse/v2/fs"
+	"github.com/hanwen/go-fuse/v2/fuse"
+)
+
+func sha256hex(s string) string {
+	h := sha256.New()
+	io.WriteString(h, s)
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+func TestBasic(t *testing.T) {
+	orig := t.TempDir()
+
+	os.WriteFile(orig+"/file1", []byte("x"), 0644)
+	os.WriteFile(orig+"/file2", []byte("y"), 0644)
+	os.WriteFile(orig+"/file3", []byte("z"), 0644)
+
+	mnt := t.TempDir()
+	db := t.TempDir()
+	root := NewTapFS(orig)
+	sec := time.Second
+	debug := true
+	server, err := fs.Mount(mnt, root, &fs.Options{
+		MountOptions:    fuse.MountOptions{Debug: debug},
+		UID:             uint32(os.Getuid()),
+		GID:             uint32(os.Getgid()),
+		EntryTimeout:    &sec,
+		AttrTimeout:     &sec,
+		NegativeTimeout: &sec,
+	})
+	if err != nil {
+		t.Fatalf("Mount fail: %v\n", err)
+	}
+	defer server.Unmount()
+	syscall.Access(mnt, 07)
+
+	cserv, err := NewCommandServer(root, db, server, debug)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	got, err := ClientRun(cserv.listener.Addr().String(),
+		"echo x >> file1 ; rm file2; sha1sum file3; echo y > file4", nil, mnt)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if debug {
+		c, err := os.ReadFile(filepath.Join(got.DepDir, got.ID+".log"))
+		if err != nil {
+			t.Error(err)
+		}
+		log.Println(string(c))
+	}
+	want := &TraceResponse{
+		Update: []string{"file1"},
+		Read:   []string{"file3"},
+		Create: []string{"file4"},
+		Delete: []string{"file2"},
+		Hashes: map[string]string{
+			"file1": sha256hex("xx\n"),
+			"file2": strings.Repeat("00", sha256.Size),
+			"file3": sha256hex("z"),
+			"file4": sha256hex("y\n"),
+		},
+	}
+	got.ID = ""
+	got.DepDir = ""
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("-want, +got: %s", diff)
+	}
+}

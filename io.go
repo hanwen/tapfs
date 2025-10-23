@@ -45,17 +45,21 @@ type CommandServer struct {
 	mu       sync.Mutex
 	Debug    bool
 	debugLog io.WriteCloser
+	listener net.Listener
+	hashes   map[hashKey]string
+}
 
-	hashes map[hashKey]string
+func (c *CommandServer) Close() error {
+	return c.listener.Close()
 }
 
 const socketName = ".tapfs"
 
-func StartCommandServer(root *TapFSRoot, dir string, server *fuse.Server, Debug bool) error {
+func NewCommandServer(root *TapFSRoot, dir string, server *fuse.Server, Debug bool) (*CommandServer, error) {
 	server.WaitMount()
 	l, sock, err := newSocket()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	depDir := filepath.Join(dir, "deps")
 	casDir := filepath.Join(dir, "cas")
@@ -69,20 +73,22 @@ func StartCommandServer(root *TapFSRoot, dir string, server *fuse.Server, Debug 
 	cas := NewCAS(casDir, sha256.New)
 
 	commandServer := &CommandServer{
-		root:   root,
-		cas:    cas,
-		ac:     NewActionCache(),
-		depDir: depDir,
-		Debug:  Debug,
-		hashes: map[hashKey]string{},
+		root:     root,
+		cas:      cas,
+		ac:       NewActionCache(),
+		depDir:   depDir,
+		Debug:    Debug,
+		hashes:   map[hashKey]string{},
+		listener: l,
 	}
 	srv := rpc.NewServer()
 	if err := srv.Register(commandServer); err != nil {
-		return err
+		return nil, err
 	}
+
 	go srv.Accept(l)
 
-	return nil
+	return commandServer, nil
 }
 
 func FindSocket(startDir string) (socket string, topdir string, err error) {
@@ -213,29 +219,30 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	rep.DepDir = s.depDir
 	rep.Hashes = map[string]string{}
 
-	for _, v := range []struct {
-		op   operation
-		dest *[]string
-	}{
-		{opRead, &rep.Read},
-		{opCreate, &rep.Create},
-		{opUpdate, &rep.Update},
-		{opDelete, &rep.Delete},
-	} {
-		for k := range od.ops[v.op] {
-			*v.dest = append(*v.dest, k)
-			if v.op == opDelete {
-				rep.Hashes[k] = s.cas.Zero()
-				continue
-			}
+	dests := map[operation]*[]string{
+		opRead:   &rep.Read,
+		opCreate: &rep.Create,
+		opUpdate: &rep.Update,
+		opDelete: &rep.Delete,
+	}
 
-			h, err := s.hashForPath(k)
+	for path, op := range od.ops {
+		dest := dests[op]
+
+		*dest = append(*dest, path)
+		if op == opDelete {
+			rep.Hashes[path] = s.cas.Zero()
+		} else {
+			h, err := s.hashForPath(path)
 			if err != nil {
 				return err
 			}
-			rep.Hashes[k] = h
+			rep.Hashes[path] = h
 		}
-		sort.Strings(*v.dest)
+	}
+
+	for _, dest := range dests {
+		sort.Strings(*dest)
 	}
 
 	if s.Debug {
@@ -288,15 +295,15 @@ func newSocket() (net.Listener, string, error) {
 var ioRegex = regexp.MustCompile(`^ninja_inputs='([^']*)'; ninja_outputs='([^']*)'; `)
 
 // Runs a command on the server for use in the command-line program
-func ClientRun(socket string, commandline string, env []string, dir string) error {
+func ClientRun(socket string, commandline string, env []string, dir string) (*TraceResponse, error) {
 	client, err := rpc.Dial("unix", socket)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	pid := os.Getpid()
 	if err := syscall.Setpgid(pid, 0); err != nil {
-		return err
+		return nil, err
 	}
 
 	req := TraceRequest{
@@ -311,16 +318,16 @@ func ClientRun(socket string, commandline string, env []string, dir string) erro
 		sort.Strings(req.DeclaredOutputs)
 		req.Command = strings.TrimSpace(commandline[len(groups[0]):])
 	} else {
-		log.Panicf("boom %q", commandline)
+		req.Command = strings.TrimSpace(commandline)
 	}
 
 	var rep TraceResponse
 	if err := client.Call("CommandServer.StartTrace", &req, &rep); err != nil {
-		return err
+		return nil, err
 	}
 
 	if rep.CacheHit {
-		return nil
+		return &rep, nil
 	}
 
 	cmd := exec.Command("/bin/sh", "-c", req.Command)
@@ -336,12 +343,12 @@ func ClientRun(socket string, commandline string, env []string, dir string) erro
 
 	err2 := client.Call("CommandServer.EndTrace", &req, &rep)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err2 != nil {
-		return err2
+		return nil, err2
 	}
-	return nil
+	return &rep, nil
 }
 
 func (s *CommandServer) storeAction(req *TraceRequest, rep *TraceResponse) error {
