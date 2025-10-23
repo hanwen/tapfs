@@ -1,6 +1,7 @@
 package tapfs
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -145,7 +146,14 @@ type TraceRequest struct {
 	DeclaredOutputs []string
 
 	// Only for EndTrace
+	Stdout   []byte
+	Stderr   []byte
 	ExitCode int
+}
+
+type CacheHit struct {
+	Stderr []byte
+	Stdout []byte
 }
 
 type TraceResponse struct {
@@ -160,7 +168,7 @@ type TraceResponse struct {
 	Hashes map[string]string
 
 	// If set, don't run command.
-	CacheHit bool
+	CacheHit *CacheHit
 }
 
 type JSONOpenData struct {
@@ -177,8 +185,7 @@ type JSONOpenData struct {
 }
 
 func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error {
-	if err := s.checkActionCache(req); err == nil {
-		rep.CacheHit = true
+	if err := s.checkActionCache(req, rep); err == nil {
 		return nil
 	} else if err == acNotFound {
 		// nothing
@@ -353,13 +360,15 @@ func ClientRun(socket string, commandline string, env []string, dir string) (*Tr
 		return nil, err
 	}
 
-	if rep.CacheHit {
+	if rep.CacheHit != nil {
 		return &rep, nil
 	}
 
 	cmd := exec.Command("/bin/sh", "-c", req.Command)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = io.MultiWriter(&outBuf, os.Stdout)
+	cmd.Stderr = io.MultiWriter(&errBuf, os.Stderr)
 	cmd.Stdin = os.Stdin
 	cmd.Dir = dir
 	cmd.Env = env
@@ -367,7 +376,8 @@ func ClientRun(socket string, commandline string, env []string, dir string) (*Tr
 	err = cmd.Run()
 
 	req.ExitCode = cmd.ProcessState.ExitCode()
-
+	req.Stderr = errBuf.Bytes()
+	req.Stdout = outBuf.Bytes()
 	err2 := client.Call("CommandServer.EndTrace", &req, &rep)
 	if err != nil {
 		return nil, err
@@ -390,7 +400,7 @@ func (s *CommandServer) storeAction(req *TraceRequest, rep *TraceResponse) error
 
 var acNotFound = errors.New("action cache not found")
 
-func (s *CommandServer) checkActionCache(req *TraceRequest) error {
+func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) error {
 	inHash := map[string]string{}
 	for _, in := range req.DeclaredInputs {
 		h, err := s.hashForPath(in)
@@ -424,6 +434,11 @@ func (s *CommandServer) checkActionCache(req *TraceRequest) error {
 		}
 	}
 	log.Printf("cache hit for: %s", req.Command)
+
+	rep.CacheHit = &CacheHit{
+		Stderr: val.Stderr,
+		Stdout: val.Stdout,
+	}
 
 	return s.fromActionCache(val)
 }

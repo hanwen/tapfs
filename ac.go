@@ -10,6 +10,9 @@ type ActionCacheValue struct {
 
 	Inputs  map[string]string
 	Outputs map[string]string
+
+	Stderr []byte
+	Stdout []byte
 }
 
 func actionCacheKey(req *TraceRequest, hashes map[string]string) string {
@@ -29,6 +32,8 @@ func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue,
 		Command: req.Command,
 		Inputs:  map[string]string{},
 		Outputs: map[string]string{},
+		Stdout:  req.Stdout,
+		Stderr:  req.Stderr,
 	}
 	for _, k := range rep.Create {
 		e.Outputs[k] = rep.Hashes[k]

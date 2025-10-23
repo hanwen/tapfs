@@ -71,3 +71,53 @@ func TestBasic(t *testing.T) {
 		t.Errorf("-want, +got: %s", diff)
 	}
 }
+
+func TestCache(t *testing.T) {
+	orig := t.TempDir()
+	mnt := t.TempDir()
+	db := t.TempDir()
+
+	os.WriteFile(orig+"/file1", []byte("x"), 0644)
+
+	root, err := fs.NewLoopbackRoot(orig)
+	server, err := NewCommandServer(root, mnt, db, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer server.FSServer.Unmount()
+
+	cmd := `ninja_inputs='file1 '; ninja_outputs='file2 '; echo hello; cp file1 file2`
+	got, err := ClientRun(server.Addr(), cmd, nil, mnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := &TraceResponse{
+		Read:   []string{"file1"},
+		Create: []string{"file2"},
+		Hashes: map[string]string{
+			"file1": sha256hex("x"),
+			"file2": sha256hex("x"),
+		},
+	}
+	got.ID = ""
+	got.DepDir = ""
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("-want, +got: %s", diff)
+	}
+	os.Remove(mnt + "/file2")
+	got, err = ClientRun(server.Addr(), cmd, nil, mnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.ID = ""
+	got.DepDir = ""
+	want = &TraceResponse{
+		CacheHit: &CacheHit{
+			Stdout: []byte("hello\n"),
+		},
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("-want, +got: %s", diff)
+	}
+}

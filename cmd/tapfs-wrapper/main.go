@@ -43,7 +43,11 @@ func main() {
 	if err != nil {
 		log.Fatal("Getwd", err)
 	}
-	_, err = tapfs.ClientRun(sock, *c, os.Environ(), wd)
+	rep, err := tapfs.ClientRun(sock, *c, os.Environ(), wd)
+	if rep.CacheHit != nil {
+		os.Stdout.Write(rep.CacheHit.Stdout)
+		os.Stderr.Write(rep.CacheHit.Stderr)
+	}
 	if ex, ok := err.(*exec.ExitError); ok {
 		os.Exit(ex.ExitCode())
 	}
