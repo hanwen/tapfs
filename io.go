@@ -260,19 +260,25 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		opDelete: &rep.Delete,
 	}
 
-	for path, op := range od.ops {
-		dest := dests[op]
-
-		*dest = append(*dest, path)
-		if op == opDelete {
-			rep.Hashes[path] = s.cas.Zero()
-		} else {
-			h, err := s.hashForPath(path)
-			if err != nil {
-				return err
-			}
-			rep.Hashes[path] = h
+	for n, op := range od.ops {
+		if _, p := n.Parent(); p == nil {
+			continue
 		}
+		path := n.Path(nil)
+		log.Println(path)
+		delete(od.deletions, path)
+		dest := dests[op]
+		*dest = append(*dest, path)
+
+		h, err := s.hashForPath(path)
+		if err != nil {
+			return err
+		}
+		rep.Hashes[path] = h
+	}
+	for path := range od.deletions {
+		rep.Delete = append(rep.Delete, path)
+		rep.Hashes[path] = s.cas.Zero()
 	}
 
 	for _, dest := range dests {

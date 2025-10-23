@@ -28,9 +28,11 @@ const opCount = 4
 type operation int
 
 type openData struct {
-	id  string
-	mu  sync.Mutex
-	ops map[string]operation
+	id string
+	mu sync.Mutex
+
+	deletions map[string]struct{}
+	ops       map[*fs.Inode]operation
 }
 
 func (r *TapFSRoot) registerPGID(pgid int) *openData {
@@ -42,8 +44,9 @@ func (r *TapFSRoot) registerPGID(pgid int) *openData {
 		ns := r.lastID + 1
 		r.lastID = ns
 		od = &openData{
-			id:  fmt.Sprintf("%d", ns),
-			ops: map[string]operation{},
+			id:        fmt.Sprintf("%d", ns),
+			deletions: map[string]struct{}{},
+			ops:       map[*fs.Inode]operation{},
 		}
 
 		r.openDataByPGID[pgid] = od
@@ -81,29 +84,23 @@ func (r *TapFSRoot) openData(pgid int) *openData {
 	}
 }
 
-func (od *openData) record(path string, op operation) {
-	if path == "" {
-		return
-	}
-
+func (od *openData) record(node *fs.Inode, path string, op operation) {
 	od.mu.Lock()
 	defer od.mu.Unlock()
 
-	update(op, od.ops, path)
-}
+	if op == opDelete {
+		od.deletions[path] = struct{}{}
+		return
+	}
 
-func update(op operation, ops map[string]operation, path string) {
-	before := ops[path]
+	before := od.ops[node]
 	if before == opCreate {
-		if op == opDelete {
-			delete(ops, path)
-		}
 		return
 	}
 	if op == opRead && before == opUpdate {
 		return
 	}
-	ops[path] = op
+	od.ops[node] = op
 }
 
 type TapFSRoot struct {
@@ -172,7 +169,7 @@ func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 	if (flags & (syscall.O_APPEND | syscall.O_TRUNC | syscall.O_RDWR | syscall.O_WRONLY)) != 0 {
 		op = opUpdate
 	}
-	n.root().openData(context2pgid(ctx)).record(n.Path(nil), op)
+	n.root().openData(context2pgid(ctx)).record(n.EmbeddedInode(), "", op)
 	return fh, retFlags, errno
 }
 
@@ -185,7 +182,7 @@ var _ = (fs.NodeCreater)((*TapFSNode)(nil))
 func (n *TapFSNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	inode, fh, flags, errno := n.LoopbackNode.Create(ctx, name, flags, mode, out)
 	if errno == 0 {
-		n.root().openData(context2pgid(ctx)).record(filepath.Join(n.Path(nil), name), opCreate)
+		n.root().openData(context2pgid(ctx)).record(inode, "", opCreate)
 	}
 
 	return inode, fh, flags, errno
@@ -194,17 +191,19 @@ func (n *TapFSNode) Create(ctx context.Context, name string, flags uint32, mode 
 func (n *TapFSNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	errno := n.LoopbackNode.Unlink(ctx, name)
 	if errno == 0 {
-		n.root().openData(context2pgid(ctx)).record(filepath.Join(n.Path(nil), name), opDelete)
+		n.root().openData(context2pgid(ctx)).record(nil, filepath.Join(n.Path(nil), name), opDelete)
 	}
 	return errno
 }
 
 func (n *TapFSNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	child := n.GetChild(name)
 	errno := n.LoopbackNode.Rename(ctx, name, newParent, newName, flags)
 	if errno == 0 {
 		od := n.root().openData(context2pgid(ctx))
-		od.record(filepath.Join(n.Path(nil), name), opDelete)
-		od.record(filepath.Join(newParent.EmbeddedInode().Path(nil), newName), opCreate)
+
+		od.record(nil, filepath.Join(n.Path(nil), name), opDelete)
+		od.record(child, "", opCreate)
 	}
 	return errno
 }
