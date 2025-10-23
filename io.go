@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -39,6 +40,7 @@ func (k *hashKey) FromStat(st *syscall.Stat_t) {
 // CommandServer serves RPC calls
 type CommandServer struct {
 	root     *TapFSRoot
+	FSServer *fuse.Server
 	depDir   string
 	cas      *CAS
 	ac       *ActionCache
@@ -52,34 +54,55 @@ type CommandServer struct {
 func (c *CommandServer) Close() error {
 	return c.listener.Close()
 }
+func (c *CommandServer) Wait() {
+	c.FSServer.Wait()
+}
 
 const socketName = ".tapfs"
 
-func NewCommandServer(root *TapFSRoot, dir string, server *fuse.Server, Debug bool) (*CommandServer, error) {
-	server.WaitMount()
+func NewCommandServer(root fs.InodeEmbedder, mntDir, dbDir string, Debug bool) (*CommandServer, error) {
+	tapRoot := NewTapFS(root.(*fs.LoopbackNode))
+
+	sec := time.Second
+	fsServer, err := fs.Mount(mntDir, tapRoot, &fs.Options{
+		MountOptions:    fuse.MountOptions{Debug: Debug},
+		UID:             uint32(os.Getuid()),
+		GID:             uint32(os.Getgid()),
+		EntryTimeout:    &sec,
+		AttrTimeout:     &sec,
+		NegativeTimeout: &sec,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	fsServer.WaitMount()
+	syscall.Access(mntDir, 07)
+
 	l, sock, err := newSocket()
 	if err != nil {
 		return nil, err
 	}
-	depDir := filepath.Join(dir, "deps")
-	casDir := filepath.Join(dir, "cas")
+	depDir := filepath.Join(dbDir, "deps")
+	casDir := filepath.Join(dbDir, "cas")
 	os.MkdirAll(depDir, 0755)
 	os.MkdirAll(casDir, 0755)
 
-	ch := root.NewPersistentInode(context.Background(), &fs.MemSymlink{
+	ch := tapRoot.NewPersistentInode(context.Background(), &fs.MemSymlink{
 		Data: []byte(sock),
 	}, fs.StableAttr{Mode: fuse.S_IFLNK})
-	root.AddChild(socketName, ch, true)
+	tapRoot.AddChild(socketName, ch, true)
 	cas := NewCAS(casDir, sha256.New)
 
 	commandServer := &CommandServer{
-		root:     root,
+		FSServer: fsServer,
+		root:     tapRoot,
 		cas:      cas,
 		ac:       NewActionCache(),
 		depDir:   depDir,
 		Debug:    Debug,
-		hashes:   map[hashKey]string{},
 		listener: l,
+		hashes:   map[hashKey]string{},
 	}
 	srv := rpc.NewServer()
 	if err := srv.Register(commandServer); err != nil {
@@ -89,6 +112,10 @@ func NewCommandServer(root *TapFSRoot, dir string, server *fuse.Server, Debug bo
 	go srv.Accept(l)
 
 	return commandServer, nil
+}
+
+func (s *CommandServer) Addr() string {
+	return s.listener.Addr().String()
 }
 
 func FindSocket(startDir string) (socket string, topdir string, err error) {

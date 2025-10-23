@@ -50,8 +50,5 @@ google-chrome http://localhost:6710/
 TODO
 ====
 
-* run server as root for backing FDs.
-
 * symlinks.
 
-* tests

@@ -3,13 +3,9 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
-	"syscall"
 	"tapfs"
-	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
-	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 func main() {
@@ -27,32 +23,16 @@ func main() {
 	if *depDir == "" {
 		log.Fatal("must set --depdir")
 	}
-	root := tapfs.NewTapFS(*origDir)
-	sec := time.Second
-	if *debug {
-		sec = 0
-	}
-	server, err := fs.Mount(mntDir, root, &fs.Options{
-		MountOptions:    fuse.MountOptions{Debug: *debug},
-		UID:             uint32(os.Getuid()),
-		GID:             uint32(os.Getgid()),
-		EntryTimeout:    &sec,
-		AttrTimeout:     &sec,
-		NegativeTimeout: &sec,
-	})
-	if err != nil {
-		log.Fatalf("Mount fail: %v\n", err)
-	}
-	log.Println("mounted!")
-
-	cserv, err := tapfs.NewCommandServer(root, *depDir, server, *debug)
+	root, err := fs.NewLoopbackRoot(*origDir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer cserv.Close()
 
-	server.WaitMount()
-	// trigger ENOSYS
-	syscall.Access(mntDir, 07)
+	server, err := tapfs.NewCommandServer(root, mntDir, *depDir, *debug)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer server.Close()
+
 	server.Wait()
 }

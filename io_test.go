@@ -8,13 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/hanwen/go-fuse/v2/fs"
-	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
 func sha256hex(s string) string {
@@ -32,29 +29,17 @@ func TestBasic(t *testing.T) {
 
 	mnt := t.TempDir()
 	db := t.TempDir()
-	root := NewTapFS(orig)
-	sec := time.Second
-	debug := true
-	server, err := fs.Mount(mnt, root, &fs.Options{
-		MountOptions:    fuse.MountOptions{Debug: debug},
-		UID:             uint32(os.Getuid()),
-		GID:             uint32(os.Getgid()),
-		EntryTimeout:    &sec,
-		AttrTimeout:     &sec,
-		NegativeTimeout: &sec,
-	})
-	if err != nil {
-		t.Fatalf("Mount fail: %v\n", err)
-	}
-	defer server.Unmount()
-	syscall.Access(mnt, 07)
 
-	cserv, err := NewCommandServer(root, db, server, debug)
+	root, err := fs.NewLoopbackRoot(orig)
+	debug := true
+
+	server, err := NewCommandServer(root, mnt, db, debug)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer server.FSServer.Unmount()
 
-	got, err := ClientRun(cserv.listener.Addr().String(),
+	got, err := ClientRun(server.Addr(),
 		"echo x >> file1 ; rm file2; sha1sum file3; echo y > file4", nil, mnt)
 
 	if err != nil {

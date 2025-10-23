@@ -136,18 +136,22 @@ func (r *TapFSRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	return r.TapFSNode.Lookup(ctx, name, out)
 }
 
-func (r *TapFSRoot) newNode(rootData *fs.LoopbackRoot, parent *fs.Inode, name string, st *syscall.Stat_t) fs.InodeEmbedder {
-	return &TapFSNode{
-		LoopbackNode: fs.LoopbackNode{RootData: rootData},
-	}
-}
-
 type TapFSNode struct {
-	fs.LoopbackNode
+	*fs.LoopbackNode
 }
 
 func (n *TapFSNode) root() *TapFSRoot {
 	return n.Root().Operations().(*TapFSRoot)
+}
+
+var _ = (fs.NodeWrapChilder)((*TapFSNode)(nil))
+
+func (n *TapFSNode) WrapChild(ctx context.Context, ops fs.InodeEmbedder) fs.InodeEmbedder {
+	if ln, ok := ops.(*fs.LoopbackNode); ok {
+		return &TapFSNode{LoopbackNode: ln}
+	}
+
+	return ops
 }
 
 var _ = (fs.NodeOpener)((*TapFSNode)(nil))
@@ -205,14 +209,11 @@ func (n *TapFSNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 	return errno
 }
 
-func NewTapFS(origDir string) *TapFSRoot {
-	root := &TapFSRoot{
+func NewTapFS(root *fs.LoopbackNode) *TapFSRoot {
+	tapRoot := &TapFSRoot{
+		TapFSNode:      TapFSNode{LoopbackNode: root},
 		openDataByPGID: map[int]*openData{},
 	}
-	root.RootData = &fs.LoopbackRoot{
-		NewNode: root.newNode,
-		Path:    origDir,
-	}
-	root.registerPGID(1)
-	return root
+	tapRoot.registerPGID(1)
+	return tapRoot
 }
