@@ -32,7 +32,9 @@ type openData struct {
 	mu sync.Mutex
 
 	deletions map[string]struct{}
-	ops       map[*fs.Inode]operation
+
+	// TODO: what to do here? The inode may be evicted if we're under memory pressure, if so, we can't get at the path anymore.
+	ops map[*fs.Inode]operation
 }
 
 func (r *TapFSRoot) registerPGID(pgid int) *openData {
@@ -135,6 +137,56 @@ func (r *TapFSRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 
 type TapFSNode struct {
 	*fs.LoopbackNode
+
+	mu   sync.Mutex
+	hash string
+}
+
+func (n *TapFSNode) GetHash(cas *CAS) (string, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.hash != "" {
+		return n.hash, nil
+	}
+
+	buf := make([]byte, 128<<10)
+	ctx := context.Background()
+	fh, _, errno := n.LoopbackNode.Open(ctx, syscall.O_RDONLY)
+	if errno != 0 {
+		return "", errno
+	}
+	defer fh.(fs.FileReleaser).Release(ctx)
+
+	w, err := cas.NewWriter()
+	if err != nil {
+		return "", err
+	}
+	var off int64
+	for {
+		res, errno := fh.(fs.FileReader).Read(ctx, buf, off)
+		if errno != 0 {
+			return "", errno
+		}
+
+		b, status := res.Bytes(buf)
+		if status != 0 {
+			return "", syscall.Errno(status)
+		}
+
+		w.Write(b)
+		if len(b) < len(buf) {
+			break
+		}
+		off += int64(len(b))
+	}
+	if err := w.Close(); err != nil {
+		return "", err
+	}
+	return w.Hash(), nil
+}
+
+func toHex(b []byte) string {
+	return fmt.Sprintf("%x", b)
 }
 
 func (n *TapFSNode) root() *TapFSRoot {
@@ -168,6 +220,10 @@ func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 	op := opRead
 	if (flags & (syscall.O_APPEND | syscall.O_TRUNC | syscall.O_RDWR | syscall.O_WRONLY)) != 0 {
 		op = opUpdate
+
+		n.mu.Lock()
+		n.hash = ""
+		n.mu.Unlock()
 	}
 	n.root().openData(context2pgid(ctx)).record(n.EmbeddedInode(), "", op)
 	return fh, retFlags, errno

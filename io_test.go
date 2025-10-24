@@ -31,7 +31,7 @@ func TestBasic(t *testing.T) {
 	db := t.TempDir()
 
 	root, err := fs.NewLoopbackRoot(orig)
-	debug := true
+	debug := false
 
 	server, err := NewCommandServer(root, mnt, db, debug)
 	if err != nil {

@@ -26,30 +26,18 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
-type hashKey struct {
-	Ino  uint64
-	Mtim syscall.Timespec
-	Size int64
-}
-
-func (k *hashKey) FromStat(st *syscall.Stat_t) {
-	k.Ino = st.Ino
-	k.Mtim = st.Mtim
-	k.Size = st.Size
-}
-
 // CommandServer serves RPC calls
 type CommandServer struct {
-	root     *TapFSRoot
-	FSServer *fuse.Server
-	depDir   string
-	cas      *CAS
-	ac       *ActionCache
-	mu       sync.Mutex
-	Debug    bool
-	debugLog io.WriteCloser
-	listener net.Listener
-	hashes   map[hashKey]string
+	root       *TapFSRoot
+	mountPoint string
+	FSServer   *fuse.Server
+	depDir     string
+	cas        *CAS
+	ac         *ActionCache
+	mu         sync.Mutex
+	Debug      bool
+	debugLog   io.WriteCloser
+	listener   net.Listener
 }
 
 func (c *CommandServer) Close() error {
@@ -96,14 +84,14 @@ func NewCommandServer(root fs.InodeEmbedder, mntDir, dbDir string, Debug bool) (
 	cas := NewCAS(casDir, sha256.New)
 
 	commandServer := &CommandServer{
-		FSServer: fsServer,
-		root:     tapRoot,
-		cas:      cas,
-		ac:       NewActionCache(),
-		depDir:   depDir,
-		Debug:    Debug,
-		listener: l,
-		hashes:   map[hashKey]string{},
+		FSServer:   fsServer,
+		mountPoint: mntDir,
+		root:       tapRoot,
+		cas:        cas,
+		ac:         NewActionCache(),
+		depDir:     depDir,
+		Debug:      Debug,
+		listener:   l,
 	}
 	srv := rpc.NewServer()
 	if err := srv.Register(commandServer); err != nil {
@@ -212,39 +200,6 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 	}
 
 	return nil
-}
-
-func (s *CommandServer) hashForPath(p string) (string, error) {
-	orig := filepath.Join(s.root.RootData.Path, p)
-	var st syscall.Stat_t
-	if err := syscall.Stat(orig, &st); err != nil {
-		return "", err
-	}
-
-	var key hashKey
-	key.FromStat(&st)
-	s.mu.Lock()
-	h, ok := s.hashes[key]
-	s.mu.Unlock()
-
-	if !ok {
-		f, err := os.Open(orig)
-		if err != nil {
-			return "", err
-		}
-
-		h, err = s.cas.Add(f)
-		f.Close()
-		if err != nil {
-			return "", err
-		}
-
-		s.mu.Lock()
-		s.hashes[key] = h
-		s.mu.Unlock()
-	}
-
-	return h, nil
 }
 
 func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
@@ -406,12 +361,51 @@ func (s *CommandServer) storeAction(req *TraceRequest, rep *TraceResponse) error
 
 var acNotFound = errors.New("action cache not found")
 
+func nodeAt(n *fs.Inode, path string) *fs.Inode {
+	for n != nil && len(path) > 0 {
+		idx := strings.Index(path, "/")
+		var comp string
+		if idx > 0 {
+			comp = path[:idx]
+			path = path[idx+1:]
+		} else {
+			comp = path
+			path = ""
+		}
+
+		n = n.GetChild(comp)
+	}
+	return n
+}
+
+func (s *CommandServer) hashForPath(path string) (string, error) {
+	full := filepath.Join(s.mountPoint, path)
+	log.Println(full)
+	if _, err := os.Lstat(full); err != nil {
+		return "", err
+	}
+
+	n := nodeAt(s.root.EmbeddedInode(), path)
+	if n == nil {
+		return "", fmt.Errorf("can't traverse %q", path)
+	}
+	if tf, ok := n.Operations().(*TapFSNode); ok {
+		h, err := tf.GetHash(s.cas)
+		if err != nil {
+			return "", err
+		}
+		return h, nil
+	}
+
+	return "", fmt.Errorf("not a TapFSNode")
+}
+
 func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) error {
 	inHash := map[string]string{}
 	for _, in := range req.DeclaredInputs {
 		h, err := s.hashForPath(in)
 		if err != nil {
-			return err
+			return fmt.Errorf("checkActionCache: %v", err)
 		}
 		inHash[in] = h
 	}
@@ -430,12 +424,13 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 		if _, ok := inHash[in]; ok {
 			continue
 		}
-
-		if h, err := s.hashForPath(in); err != nil {
-			// don't propagate. Maybe ENOENT
+		h, err := s.hashForPath(in)
+		if err != nil {
 			return nil
-		} else if h != inH {
-			log.Printf("cache miss due to undeclared dep %q", in)
+		}
+
+		if h != inH {
+			// undeclared dep.
 			return nil
 		}
 	}
@@ -465,21 +460,11 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 			return err
 		}
 
-		var st syscall.Stat_t
-		if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
-			return err
-		}
-
-		var k hashKey
-		k.FromStat(&st)
-
-		s.mu.Lock()
-		s.hashes[k] = outHash
-		s.mu.Unlock()
-
 		if err := f.Close(); err != nil {
 			return err
 		}
+
+		// TODO populate n.hash
 
 		r.Close()
 	}

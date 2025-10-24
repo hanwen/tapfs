@@ -39,27 +39,53 @@ func (c *CAS) Get(h string) (*os.File, error) {
 	return os.Open(c.path(h))
 }
 
-func (c *CAS) Add(r io.Reader) (string, error) {
+type CasWriter struct {
+	io.Writer
+	dest *os.File
+	hash hash.Hash
+	cas  *CAS
+}
+
+func (w *CasWriter) Close() error {
+	err := w.dest.Close()
+	if err != nil {
+		return err
+	}
+
+	h := w.Hash()
+	if err := os.Rename(w.dest.Name(), w.cas.path(h)); err != nil {
+		os.Remove(w.dest.Name())
+		return err
+	}
+	return nil
+}
+
+func (w *CasWriter) Hash() string {
+	return toHex(w.hash.Sum(nil))
+}
+
+func (c *CAS) NewWriter() (*CasWriter, error) {
 	f, err := os.CreateTemp(c.dir, "")
+	if err != nil {
+		return nil, err
+	}
+
+	cw := &CasWriter{dest: f, cas: c, hash: c.newhash()}
+	cw.Writer = io.MultiWriter(cw.hash, f)
+	return cw, nil
+}
+
+func (c *CAS) Add(r io.Reader) (string, error) {
+	w, err := c.NewWriter()
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	hw := c.newhash()
-
-	mw := io.MultiWriter(hw, f)
-	if _, err := io.Copy(mw, r); err != nil {
+	if _, err := io.Copy(w, r); err != nil {
 		return "", err
 	}
-	if err := f.Close(); err != nil {
+	if err := w.Close(); err != nil {
 		return "", err
 	}
 
-	h := fmt.Sprintf("%x", hw.Sum(nil))
-	if err := os.Rename(f.Name(), c.path(h)); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-
-	return string(h), nil
+	return w.Hash(), nil
 }
