@@ -453,6 +453,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 }
 
 func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
+	var wg sync.WaitGroup
 	for out, fileInfo := range val.Outputs {
 		r, err := s.cas.Get(fileInfo.Digest)
 		if err != nil {
@@ -464,7 +465,9 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 		case FileExecutable:
 			mode = 0755
 		}
-		f, err := os.OpenFile(filepath.Join(s.root.RootData.Path, out), os.O_CREATE|os.O_WRONLY, os.FileMode(mode))
+		orig := filepath.Join(s.root.RootData.Path, out)
+		f, err := os.OpenFile(orig, os.O_CREATE|os.O_WRONLY, os.FileMode(mode))
+		log.Println(orig)
 		if err != nil {
 			return err
 		}
@@ -477,9 +480,28 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 			return err
 		}
 
-		// TODO populate n.hash
+		wg.Add(1)
+		go func(p string) {
+			os.Lstat(filepath.Join(s.mountPoint, p))
+			wg.Done()
+		}(out)
 
 		r.Close()
 	}
+	wg.Wait()
+
+	rootInode := s.root.EmbeddedInode()
+	for out, fileInfo := range val.Outputs {
+		ch := nodeAt(rootInode, out)
+		if ch == nil {
+			log.Printf("path %q no child", out)
+			continue
+		}
+		tf := ch.Operations().(*TapFSNode)
+		tf.mu.Lock()
+		tf.fileInfo = fileInfo
+		tf.mu.Unlock()
+	}
+
 	return nil
 }
