@@ -59,10 +59,10 @@ func TestBasic(t *testing.T) {
 			"file3": OpRead,
 			"file4": OpCreate,
 		},
-		Files: map[string]Digest{
-			"file1": sha256hex("xx\n"),
-			"file3": sha256hex("z"),
-			"file4": sha256hex("y\n"),
+		Files: map[string]FileInfo{
+			"file1": FileInfo{Digest: sha256hex("xx\n")},
+			"file3": FileInfo{Digest: sha256hex("z")},
+			"file4": FileInfo{Digest: sha256hex("y\n")},
 		},
 	}
 	got.ID = ""
@@ -97,9 +97,9 @@ func TestCache(t *testing.T) {
 			"file1": OpRead,
 			"file2": OpCreate,
 		},
-		Files: map[string]Digest{
-			"file1": sha256hex("x"),
-			"file2": sha256hex("x"),
+		Files: map[string]FileInfo{
+			"file1": FileInfo{Digest: sha256hex("x")},
+			"file2": FileInfo{Digest: sha256hex("x")},
 		},
 	}
 	got.ID = ""

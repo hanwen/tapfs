@@ -138,18 +138,18 @@ func (r *TapFSRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 type TapFSNode struct {
 	*fs.LoopbackNode
 
-	mu     sync.Mutex
-	digest Digest
+	mu       sync.Mutex
+	fileInfo FileInfo
 }
 
-func (n *TapFSNode) GetDigest(cas *CAS) (Digest, error) {
+func (n *TapFSNode) GetDigest(cas *CAS) (FileInfo, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.digest.Hash != "" {
-		return n.digest, nil
+	if n.fileInfo.Digest.Hash != "" {
+		return n.fileInfo, nil
 	}
 
-	var dig Digest
+	var fi FileInfo
 	err := func() error {
 		buf := make([]byte, 128<<10)
 		ctx := context.Background()
@@ -184,11 +184,16 @@ func (n *TapFSNode) GetDigest(cas *CAS) (Digest, error) {
 		if err := w.Close(); err != nil {
 			return err
 		}
-		dig = w.Digest()
+		fi = FileInfo{Digest: w.Digest()}
 		return nil
 	}()
 
-	return dig, err
+	if err != nil {
+		return FileInfo{}, err
+	}
+
+	n.fileInfo = fi
+	return fi, nil
 }
 
 func toHex(b []byte) string {
@@ -228,7 +233,7 @@ func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		op = OpUpdate
 
 		n.mu.Lock()
-		n.digest = Digest{}
+		n.fileInfo = FileInfo{}
 		n.mu.Unlock()
 	}
 	n.root().openData(context2pgid(ctx)).record(n.EmbeddedInode(), "", op)

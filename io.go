@@ -144,12 +144,24 @@ type CacheHit struct {
 	Stdout []byte
 }
 
+type FileType byte
+
+const (
+	FileRegular    = 0
+	FileExecutable = 1
+)
+
+type FileInfo struct {
+	Digest Digest
+	Type   FileType
+}
+
 type TraceResponse struct {
 	// only populated for EndTrace
 	ID     string
 	DepDir string
 
-	Files      map[string]Digest
+	Files      map[string]FileInfo
 	Operations map[string]Operation
 
 	// If set, don't run command.
@@ -203,7 +215,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	od := s.root.removeRecord(req.PGID)
 	rep.ID = od.id
 	rep.DepDir = s.depDir
-	rep.Files = map[string]Digest{}
+	rep.Files = map[string]FileInfo{}
 	rep.Operations = map[string]Operation{}
 	for n, op := range od.ops {
 		if _, p := n.Parent(); p == nil {
@@ -212,11 +224,11 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		path := n.Path(nil)
 		delete(od.deletions, path)
 
-		dig, err := s.hashForPath(path)
+		fi, err := s.hashForPath(path)
 		if err != nil {
 			return err
 		}
-		rep.Files[path] = dig
+		rep.Files[path] = fi
 		rep.Operations[path] = op
 	}
 	for path := range od.deletions {
@@ -241,7 +253,10 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		ID:      rep.ID,
 		Command: req.Command,
 		Dir:     req.Dir,
-		Hashes:  rep.Files,
+		Hashes:  map[string]Digest{},
+	}
+	for path, f := range rep.Files {
+		jsonOD.Hashes[path] = f.Digest
 	}
 	dests := map[Operation]*[]string{
 		OpRead:   &jsonOD.Read,
@@ -369,7 +384,7 @@ func nodeAt(n *fs.Inode, path string) *fs.Inode {
 	return n
 }
 
-func (s *CommandServer) hashForPath(path string) (dig Digest, err error) {
+func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
 	err = func() error {
 		full := filepath.Join(s.mountPoint, path)
 		if _, err := os.Lstat(full); err != nil {
@@ -381,7 +396,7 @@ func (s *CommandServer) hashForPath(path string) (dig Digest, err error) {
 			return fmt.Errorf("can't traverse %q", path)
 		}
 		if tf, ok := n.Operations().(*TapFSNode); ok {
-			dig, err = tf.GetDigest(s.cas)
+			fi, err = tf.GetDigest(s.cas)
 			if err != nil {
 				return err
 			}
@@ -390,11 +405,11 @@ func (s *CommandServer) hashForPath(path string) (dig Digest, err error) {
 
 		return fmt.Errorf("not a TapFSNode")
 	}()
-	return dig, err
+	return fi, err
 }
 
 func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) error {
-	inHash := map[string]Digest{}
+	inHash := map[string]FileInfo{}
 	for _, in := range req.DeclaredInputs {
 		h, err := s.hashForPath(in)
 		if err != nil {
@@ -439,7 +454,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 
 func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 	for out, outHash := range val.Outputs {
-		r, err := s.cas.Get(outHash)
+		r, err := s.cas.Get(outHash.Digest)
 		if err != nil {
 			return err
 		}

@@ -8,17 +8,18 @@ import (
 type ActionCacheValue struct {
 	Command string
 
-	Inputs  map[string]Digest
-	Outputs map[string]Digest
+	Inputs  map[string]FileInfo
+	Outputs map[string]FileInfo
 
 	Stderr []byte
 	Stdout []byte
 }
 
-func actionCacheKey(req *TraceRequest, hashes map[string]Digest) string {
+func actionCacheKey(req *TraceRequest, hashes map[string]FileInfo) string {
 	key := req.Command + strings.Join(req.DeclaredInputs, "\000") + strings.Join(req.DeclaredOutputs, "\000")
 	for _, k := range req.DeclaredInputs {
-		key += hashes[k].Hash + "\000"
+		fi := hashes[k]
+		key += fi.Digest.Hash + string([]byte{byte(fi.Type)})
 	}
 	return key
 }
@@ -26,8 +27,8 @@ func actionCacheKey(req *TraceRequest, hashes map[string]Digest) string {
 func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue, error) {
 	e := &ActionCacheValue{
 		Command: req.Command,
-		Inputs:  map[string]Digest{},
-		Outputs: map[string]Digest{},
+		Inputs:  map[string]FileInfo{},
+		Outputs: map[string]FileInfo{},
 		Stdout:  req.Stdout,
 		Stderr:  req.Stderr,
 	}
