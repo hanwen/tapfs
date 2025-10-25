@@ -138,51 +138,57 @@ func (r *TapFSRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 type TapFSNode struct {
 	*fs.LoopbackNode
 
-	mu   sync.Mutex
-	hash string
+	mu     sync.Mutex
+	digest Digest
 }
 
-func (n *TapFSNode) GetHash(cas *CAS) (string, error) {
+func (n *TapFSNode) GetDigest(cas *CAS) (Digest, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.hash != "" {
-		return n.hash, nil
+	if n.digest.Hash != "" {
+		return n.digest, nil
 	}
 
-	buf := make([]byte, 128<<10)
-	ctx := context.Background()
-	fh, _, errno := n.LoopbackNode.Open(ctx, syscall.O_RDONLY)
-	if errno != 0 {
-		return "", errno
-	}
-	defer fh.(fs.FileReleaser).Release(ctx)
-
-	w, err := cas.NewWriter()
-	if err != nil {
-		return "", err
-	}
-	var off int64
-	for {
-		res, errno := fh.(fs.FileReader).Read(ctx, buf, off)
+	var dig Digest
+	err := func() error {
+		buf := make([]byte, 128<<10)
+		ctx := context.Background()
+		fh, _, errno := n.LoopbackNode.Open(ctx, syscall.O_RDONLY)
 		if errno != 0 {
-			return "", errno
+			return errno
 		}
+		defer fh.(fs.FileReleaser).Release(ctx)
 
-		b, status := res.Bytes(buf)
-		if status != 0 {
-			return "", syscall.Errno(status)
+		w, err := cas.NewWriter()
+		if err != nil {
+			return err
 		}
+		var off int64
+		for {
+			res, errno := fh.(fs.FileReader).Read(ctx, buf, off)
+			if errno != 0 {
+				return errno
+			}
 
-		w.Write(b)
-		if len(b) < len(buf) {
-			break
+			b, status := res.Bytes(buf)
+			if status != 0 {
+				return syscall.Errno(status)
+			}
+
+			w.Write(b)
+			if len(b) < len(buf) {
+				break
+			}
+			off += int64(len(b))
 		}
-		off += int64(len(b))
-	}
-	if err := w.Close(); err != nil {
-		return "", err
-	}
-	return w.Hash(), nil
+		if err := w.Close(); err != nil {
+			return err
+		}
+		dig = w.Digest()
+		return nil
+	}()
+
+	return dig, err
 }
 
 func toHex(b []byte) string {
@@ -222,7 +228,7 @@ func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint
 		op = opUpdate
 
 		n.mu.Lock()
-		n.hash = ""
+		n.digest = Digest{}
 		n.mu.Unlock()
 	}
 	n.root().openData(context2pgid(ctx)).record(n.EmbeddedInode(), "", op)

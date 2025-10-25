@@ -14,10 +14,10 @@ import (
 	"github.com/hanwen/go-fuse/v2/fs"
 )
 
-func sha256hex(s string) string {
+func sha256hex(s string) Digest {
 	h := sha256.New()
 	io.WriteString(h, s)
-	return fmt.Sprintf("%x", h.Sum(nil))
+	return Digest{fmt.Sprintf("%x", h.Sum(nil)), uint64(len(s))}
 }
 
 func TestBasic(t *testing.T) {
@@ -58,9 +58,9 @@ func TestBasic(t *testing.T) {
 		Read:   []string{"file3"},
 		Create: []string{"file4"},
 		Delete: []string{"file2"},
-		Hashes: map[string]string{
+		Hashes: map[string]Digest{
 			"file1": sha256hex("xx\n"),
-			"file2": strings.Repeat("00", sha256.Size),
+			"file2": Digest{strings.Repeat("00", sha256.Size), 0},
 			"file3": sha256hex("z"),
 			"file4": sha256hex("y\n"),
 		},
@@ -95,7 +95,7 @@ func TestCache(t *testing.T) {
 	want := &TraceResponse{
 		Read:   []string{"file1"},
 		Create: []string{"file2"},
-		Hashes: map[string]string{
+		Hashes: map[string]Digest{
 			"file1": sha256hex("x"),
 			"file2": sha256hex("x"),
 		},

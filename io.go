@@ -153,7 +153,7 @@ type TraceResponse struct {
 	Update []string
 	Delete []string
 
-	Hashes map[string]string
+	Hashes map[string]Digest
 
 	// If set, don't run command.
 	CacheHit *CacheHit
@@ -169,7 +169,7 @@ type JSONOpenData struct {
 	Update []string
 	Delete []string
 
-	Hashes map[string]string
+	Hashes map[string]Digest
 }
 
 func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error {
@@ -206,7 +206,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	od := s.root.removeRecord(req.PGID)
 	rep.ID = od.id
 	rep.DepDir = s.depDir
-	rep.Hashes = map[string]string{}
+	rep.Hashes = map[string]Digest{}
 
 	dests := map[operation]*[]string{
 		opRead:   &rep.Read,
@@ -378,30 +378,32 @@ func nodeAt(n *fs.Inode, path string) *fs.Inode {
 	return n
 }
 
-func (s *CommandServer) hashForPath(path string) (string, error) {
-	full := filepath.Join(s.mountPoint, path)
-	log.Println(full)
-	if _, err := os.Lstat(full); err != nil {
-		return "", err
-	}
-
-	n := nodeAt(s.root.EmbeddedInode(), path)
-	if n == nil {
-		return "", fmt.Errorf("can't traverse %q", path)
-	}
-	if tf, ok := n.Operations().(*TapFSNode); ok {
-		h, err := tf.GetHash(s.cas)
-		if err != nil {
-			return "", err
+func (s *CommandServer) hashForPath(path string) (dig Digest, err error) {
+	err = func() error {
+		full := filepath.Join(s.mountPoint, path)
+		if _, err := os.Lstat(full); err != nil {
+			return err
 		}
-		return h, nil
-	}
 
-	return "", fmt.Errorf("not a TapFSNode")
+		n := nodeAt(s.root.EmbeddedInode(), path)
+		if n == nil {
+			return fmt.Errorf("can't traverse %q", path)
+		}
+		if tf, ok := n.Operations().(*TapFSNode); ok {
+			dig, err = tf.GetDigest(s.cas)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+
+		return fmt.Errorf("not a TapFSNode")
+	}()
+	return dig, err
 }
 
 func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) error {
-	inHash := map[string]string{}
+	inHash := map[string]Digest{}
 	for _, in := range req.DeclaredInputs {
 		h, err := s.hashForPath(in)
 		if err != nil {
