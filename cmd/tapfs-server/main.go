@@ -33,6 +33,6 @@ func main() {
 		log.Fatal(err)
 	}
 	defer server.Close()
-
+	log.Printf("tapfs ready")
 	server.Wait()
 }

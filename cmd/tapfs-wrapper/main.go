@@ -44,6 +44,9 @@ func main() {
 		log.Fatal("Getwd", err)
 	}
 	rep, err := tapfs.ClientRun(sock, *c, os.Environ(), wd)
+	if err != nil {
+		log.Fatalf("ClientRun: %v", err)
+	}
 	if rep.CacheHit != nil {
 		os.Stdout.Write(rep.CacheHit.Stdout)
 		os.Stderr.Write(rep.CacheHit.Stderr)

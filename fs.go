@@ -135,6 +135,7 @@ func (r *TapFSRoot) Lookup(ctx context.Context, name string, out *fuse.EntryOut)
 	return r.TapFSNode.Lookup(ctx, name, out)
 }
 
+// TODO: Setattr should toggle FileType if applicable
 type TapFSNode struct {
 	*fs.LoopbackNode
 

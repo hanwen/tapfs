@@ -466,8 +466,10 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 			mode = 0755
 		}
 		orig := filepath.Join(s.root.RootData.Path, out)
+		if err := os.MkdirAll(filepath.Dir(orig), 0755); err != nil {
+			return err
+		}
 		f, err := os.OpenFile(orig, os.O_CREATE|os.O_WRONLY, os.FileMode(mode))
-		log.Println(orig)
 		if err != nil {
 			return err
 		}

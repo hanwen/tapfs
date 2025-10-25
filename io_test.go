@@ -135,3 +135,30 @@ func TestCache(t *testing.T) {
 		t.Errorf("want exe got mode %o", fi.Mode())
 	}
 }
+
+func TestCacheDir(t *testing.T) {
+	orig := t.TempDir()
+	mnt := t.TempDir()
+	db := t.TempDir()
+
+	os.WriteFile(orig+"/file1", []byte("x"), 0644)
+
+	root, err := fs.NewLoopbackRoot(orig)
+	server, err := NewCommandServer(root, mnt, db, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer server.FSServer.Unmount()
+
+	cmd := `mkdir build ; echo  x > build/file`
+	if _, err := ClientRun(server.Addr(), cmd, nil, mnt); err != nil {
+		t.Fatal(err)
+	}
+
+	os.Remove(mnt + "/build/file")
+	os.Remove(mnt + "/build")
+	_, err = ClientRun(server.Addr(), cmd, nil, mnt)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
