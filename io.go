@@ -147,8 +147,8 @@ type CacheHit struct {
 type FileType byte
 
 const (
-	FileRegular    = 0
-	FileExecutable = 1
+	FileRegular    = FileType(0)
+	FileExecutable = FileType(1)
 )
 
 type FileInfo struct {
@@ -396,7 +396,7 @@ func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
 			return fmt.Errorf("can't traverse %q", path)
 		}
 		if tf, ok := n.Operations().(*TapFSNode); ok {
-			fi, err = tf.GetDigest(s.cas)
+			fi, err = tf.GetFileInfo(s.cas)
 			if err != nil {
 				return err
 			}
@@ -453,13 +453,18 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 }
 
 func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
-	for out, outHash := range val.Outputs {
-		r, err := s.cas.Get(outHash.Digest)
+	for out, fileInfo := range val.Outputs {
+		r, err := s.cas.Get(fileInfo.Digest)
 		if err != nil {
 			return err
 		}
 
-		f, err := os.Create(filepath.Join(s.root.RootData.Path, out))
+		mode := 0644
+		switch fileInfo.Type {
+		case FileExecutable:
+			mode = 0755
+		}
+		f, err := os.OpenFile(filepath.Join(s.root.RootData.Path, out), os.O_CREATE|os.O_WRONLY, os.FileMode(mode))
 		if err != nil {
 			return err
 		}

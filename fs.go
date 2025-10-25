@@ -142,17 +142,29 @@ type TapFSNode struct {
 	fileInfo FileInfo
 }
 
-func (n *TapFSNode) GetDigest(cas *CAS) (FileInfo, error) {
+func (n *TapFSNode) GetFileInfo(cas *CAS) (FileInfo, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+
 	if n.fileInfo.Digest.Hash != "" {
 		return n.fileInfo, nil
 	}
 
 	var fi FileInfo
 	err := func() error {
-		buf := make([]byte, 128<<10)
 		ctx := context.Background()
+		var attr fuse.AttrOut
+		errno := n.LoopbackNode.Getattr(ctx, nil, &attr)
+		if errno != 0 {
+			return errno
+		}
+
+		typ := FileRegular
+		if attr.Mode&0111 != 0 {
+			typ = FileExecutable
+		}
+
+		buf := make([]byte, 128<<10)
 		fh, _, errno := n.LoopbackNode.Open(ctx, syscall.O_RDONLY)
 		if errno != 0 {
 			return errno
@@ -184,7 +196,10 @@ func (n *TapFSNode) GetDigest(cas *CAS) (FileInfo, error) {
 		if err := w.Close(); err != nil {
 			return err
 		}
-		fi = FileInfo{Digest: w.Digest()}
+		fi = FileInfo{
+			Digest: w.Digest(),
+			Type:   typ,
+		}
 		return nil
 	}()
 

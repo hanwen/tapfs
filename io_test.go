@@ -39,7 +39,7 @@ func TestBasic(t *testing.T) {
 	defer server.FSServer.Unmount()
 
 	got, err := ClientRun(server.Addr(),
-		"echo x >> file1 ; rm file2; sha1sum file3; echo y > file4", nil, mnt)
+		"echo x >> file1 ; rm file2; sha1sum file3; echo y > file4; echo '#!' > exe ; chmod +x exe", nil, mnt)
 
 	if err != nil {
 		t.Fatal(err)
@@ -58,11 +58,13 @@ func TestBasic(t *testing.T) {
 			"file2": OpDelete,
 			"file3": OpRead,
 			"file4": OpCreate,
+			"exe":   OpCreate,
 		},
 		Files: map[string]FileInfo{
 			"file1": FileInfo{Digest: sha256hex("xx\n")},
 			"file3": FileInfo{Digest: sha256hex("z")},
 			"file4": FileInfo{Digest: sha256hex("y\n")},
+			"exe":   FileInfo{Digest: sha256hex("#!\n"), Type: FileExecutable},
 		},
 	}
 	got.ID = ""
@@ -86,7 +88,7 @@ func TestCache(t *testing.T) {
 	}
 	defer server.FSServer.Unmount()
 
-	cmd := `ninja_inputs='file1 '; ninja_outputs='file2 '; echo hello; cp file1 file2`
+	cmd := `ninja_inputs='file1 '; ninja_outputs='file2 '; echo hello; cp file1 file2; cp file1 exe ; chmod 755 exe`
 	got, err := ClientRun(server.Addr(), cmd, nil, mnt)
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +98,12 @@ func TestCache(t *testing.T) {
 		Operations: map[string]Operation{
 			"file1": OpRead,
 			"file2": OpCreate,
+			"exe":   OpCreate,
 		},
 		Files: map[string]FileInfo{
 			"file1": FileInfo{Digest: sha256hex("x")},
 			"file2": FileInfo{Digest: sha256hex("x")},
+			"exe":   FileInfo{Digest: sha256hex("x"), Type: FileExecutable},
 		},
 	}
 	got.ID = ""
@@ -108,6 +112,7 @@ func TestCache(t *testing.T) {
 		t.Errorf("-want, +got: %s", diff)
 	}
 	os.Remove(mnt + "/file2")
+	os.Remove(mnt + "/exe")
 	got, err = ClientRun(server.Addr(), cmd, nil, mnt)
 	if err != nil {
 		t.Fatal(err)
@@ -121,5 +126,12 @@ func TestCache(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Errorf("-want, +got: %s", diff)
+	}
+
+	fi, err := os.Lstat(mnt + "/exe")
+	exe := fi.Mode()&0111 != 0
+
+	if !exe {
+		t.Errorf("want exe got mode %o", fi.Mode())
 	}
 }
