@@ -148,12 +148,9 @@ type TraceResponse struct {
 	// only populated for EndTrace
 	ID     string
 	DepDir string
-	Read   []string
-	Create []string
-	Update []string
-	Delete []string
 
-	Hashes map[string]Digest
+	Hashes     map[string]Digest
+	Operations map[string]Operation
 
 	// If set, don't run command.
 	CacheHit *CacheHit
@@ -207,37 +204,23 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	rep.ID = od.id
 	rep.DepDir = s.depDir
 	rep.Hashes = map[string]Digest{}
-
-	dests := map[operation]*[]string{
-		opRead:   &rep.Read,
-		opCreate: &rep.Create,
-		opUpdate: &rep.Update,
-		opDelete: &rep.Delete,
-	}
-
+	rep.Operations = map[string]Operation{}
 	for n, op := range od.ops {
 		if _, p := n.Parent(); p == nil {
 			continue
 		}
 		path := n.Path(nil)
-		log.Println(path)
 		delete(od.deletions, path)
-		dest := dests[op]
-		*dest = append(*dest, path)
 
-		h, err := s.hashForPath(path)
+		dig, err := s.hashForPath(path)
 		if err != nil {
 			return err
 		}
-		rep.Hashes[path] = h
+		rep.Hashes[path] = dig
+		rep.Operations[path] = op
 	}
 	for path := range od.deletions {
-		rep.Delete = append(rep.Delete, path)
-		rep.Hashes[path] = s.cas.Zero()
-	}
-
-	for _, dest := range dests {
-		sort.Strings(*dest)
+		rep.Operations[path] = OpDelete
 	}
 
 	if s.Debug {
@@ -258,11 +241,19 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		ID:      rep.ID,
 		Command: req.Command,
 		Dir:     req.Dir,
-		Read:    rep.Read,
-		Create:  rep.Create,
-		Update:  rep.Update,
-		Delete:  rep.Delete,
 		Hashes:  rep.Hashes,
+	}
+	dests := map[Operation]*[]string{
+		OpRead:   &jsonOD.Read,
+		OpCreate: &jsonOD.Create,
+		OpUpdate: &jsonOD.Update,
+		OpDelete: &jsonOD.Delete,
+	}
+	for p, op := range rep.Operations {
+		*dests[op] = append(*dests[op], p)
+	}
+	for _, v := range dests {
+		sort.Strings(*v)
 	}
 
 	if data, err := json.Marshal(jsonOD); err != nil {

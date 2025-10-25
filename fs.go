@@ -17,15 +17,15 @@ import (
 )
 
 var (
-	opRead   = operation(0)
-	opCreate = operation(1)
-	opUpdate = operation(2)
-	opDelete = operation(3)
+	OpRead   = Operation(0)
+	OpCreate = Operation(1)
+	OpUpdate = Operation(2)
+	OpDelete = Operation(3)
 )
 
 const opCount = 4
 
-type operation int
+type Operation int
 
 type openData struct {
 	id string
@@ -34,7 +34,7 @@ type openData struct {
 	deletions map[string]struct{}
 
 	// TODO: what to do here? The inode may be evicted if we're under memory pressure, if so, we can't get at the path anymore.
-	ops map[*fs.Inode]operation
+	ops map[*fs.Inode]Operation
 }
 
 func (r *TapFSRoot) registerPGID(pgid int) *openData {
@@ -48,7 +48,7 @@ func (r *TapFSRoot) registerPGID(pgid int) *openData {
 		od = &openData{
 			id:        fmt.Sprintf("%d", ns),
 			deletions: map[string]struct{}{},
-			ops:       map[*fs.Inode]operation{},
+			ops:       map[*fs.Inode]Operation{},
 		}
 
 		r.openDataByPGID[pgid] = od
@@ -86,20 +86,20 @@ func (r *TapFSRoot) openData(pgid int) *openData {
 	}
 }
 
-func (od *openData) record(node *fs.Inode, path string, op operation) {
+func (od *openData) record(node *fs.Inode, path string, op Operation) {
 	od.mu.Lock()
 	defer od.mu.Unlock()
 
-	if op == opDelete {
+	if op == OpDelete {
 		od.deletions[path] = struct{}{}
 		return
 	}
 
 	before := od.ops[node]
-	if before == opCreate {
+	if before == OpCreate {
 		return
 	}
-	if op == opRead && before == opUpdate {
+	if op == OpRead && before == OpUpdate {
 		return
 	}
 	od.ops[node] = op
@@ -223,9 +223,9 @@ func context2pgid(ctx context.Context) int {
 func (n *TapFSNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	fh, retFlags, errno := n.LoopbackNode.Open(ctx, flags)
 
-	op := opRead
+	op := OpRead
 	if (flags & (syscall.O_APPEND | syscall.O_TRUNC | syscall.O_RDWR | syscall.O_WRONLY)) != 0 {
-		op = opUpdate
+		op = OpUpdate
 
 		n.mu.Lock()
 		n.digest = Digest{}
@@ -244,7 +244,7 @@ var _ = (fs.NodeCreater)((*TapFSNode)(nil))
 func (n *TapFSNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	inode, fh, flags, errno := n.LoopbackNode.Create(ctx, name, flags, mode, out)
 	if errno == 0 {
-		n.root().openData(context2pgid(ctx)).record(inode, "", opCreate)
+		n.root().openData(context2pgid(ctx)).record(inode, "", OpCreate)
 	}
 
 	return inode, fh, flags, errno
@@ -253,7 +253,7 @@ func (n *TapFSNode) Create(ctx context.Context, name string, flags uint32, mode 
 func (n *TapFSNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	errno := n.LoopbackNode.Unlink(ctx, name)
 	if errno == 0 {
-		n.root().openData(context2pgid(ctx)).record(nil, filepath.Join(n.Path(nil), name), opDelete)
+		n.root().openData(context2pgid(ctx)).record(nil, filepath.Join(n.Path(nil), name), OpDelete)
 	}
 	return errno
 }
@@ -264,8 +264,8 @@ func (n *TapFSNode) Rename(ctx context.Context, name string, newParent fs.InodeE
 	if errno == 0 {
 		od := n.root().openData(context2pgid(ctx))
 
-		od.record(nil, filepath.Join(n.Path(nil), name), opDelete)
-		od.record(child, "", opCreate)
+		od.record(nil, filepath.Join(n.Path(nil), name), OpDelete)
+		od.record(child, "", OpCreate)
 	}
 	return errno
 }

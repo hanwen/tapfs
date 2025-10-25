@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -54,13 +53,14 @@ func TestBasic(t *testing.T) {
 		log.Println(string(c))
 	}
 	want := &TraceResponse{
-		Update: []string{"file1"},
-		Read:   []string{"file3"},
-		Create: []string{"file4"},
-		Delete: []string{"file2"},
+		Operations: map[string]Operation{
+			"file1": OpUpdate,
+			"file2": OpDelete,
+			"file3": OpRead,
+			"file4": OpCreate,
+		},
 		Hashes: map[string]Digest{
 			"file1": sha256hex("xx\n"),
-			"file2": Digest{strings.Repeat("00", sha256.Size), 0},
 			"file3": sha256hex("z"),
 			"file4": sha256hex("y\n"),
 		},
@@ -93,8 +93,10 @@ func TestCache(t *testing.T) {
 	}
 
 	want := &TraceResponse{
-		Read:   []string{"file1"},
-		Create: []string{"file2"},
+		Operations: map[string]Operation{
+			"file1": OpRead,
+			"file2": OpCreate,
+		},
 		Hashes: map[string]Digest{
 			"file1": sha256hex("x"),
 			"file2": sha256hex("x"),

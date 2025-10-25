@@ -24,10 +24,6 @@ func actionCacheKey(req *TraceRequest, hashes map[string]Digest) string {
 }
 
 func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue, error) {
-	if len(rep.Update) != 0 || len(rep.Delete) != 0 {
-		return nil, fmt.Errorf("cannot cache updates or deletions")
-	}
-
 	e := &ActionCacheValue{
 		Command: req.Command,
 		Inputs:  map[string]Digest{},
@@ -35,11 +31,16 @@ func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue,
 		Stdout:  req.Stdout,
 		Stderr:  req.Stderr,
 	}
-	for _, k := range rep.Create {
-		e.Outputs[k] = rep.Hashes[k]
-	}
-	for _, k := range rep.Read {
-		e.Inputs[k] = rep.Hashes[k]
+	for p, op := range rep.Operations {
+		if op == OpUpdate || op == OpDelete {
+			return nil, fmt.Errorf("cannot cache updates or deletions: %s = %d", p, op)
+		}
+		if op == OpCreate {
+			e.Outputs[p] = rep.Hashes[p]
+		}
+		if op == OpRead {
+			e.Inputs[p] = rep.Hashes[p]
+		}
 	}
 	return e, nil
 }
