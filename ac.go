@@ -36,10 +36,10 @@ func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue,
 			return nil, fmt.Errorf("cannot cache updates or deletions: %s = %d", p, op)
 		}
 		if op == OpCreate {
-			e.Outputs[p] = rep.Hashes[p]
+			e.Outputs[p] = rep.Files[p]
 		}
 		if op == OpRead {
-			e.Inputs[p] = rep.Hashes[p]
+			e.Inputs[p] = rep.Files[p]
 		}
 	}
 	return e, nil

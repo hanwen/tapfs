@@ -149,7 +149,7 @@ type TraceResponse struct {
 	ID     string
 	DepDir string
 
-	Hashes     map[string]Digest
+	Files      map[string]Digest
 	Operations map[string]Operation
 
 	// If set, don't run command.
@@ -203,7 +203,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	od := s.root.removeRecord(req.PGID)
 	rep.ID = od.id
 	rep.DepDir = s.depDir
-	rep.Hashes = map[string]Digest{}
+	rep.Files = map[string]Digest{}
 	rep.Operations = map[string]Operation{}
 	for n, op := range od.ops {
 		if _, p := n.Parent(); p == nil {
@@ -216,7 +216,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		if err != nil {
 			return err
 		}
-		rep.Hashes[path] = dig
+		rep.Files[path] = dig
 		rep.Operations[path] = op
 	}
 	for path := range od.deletions {
@@ -241,7 +241,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		ID:      rep.ID,
 		Command: req.Command,
 		Dir:     req.Dir,
-		Hashes:  rep.Hashes,
+		Hashes:  rep.Files,
 	}
 	dests := map[Operation]*[]string{
 		OpRead:   &jsonOD.Read,
@@ -345,7 +345,7 @@ func (s *CommandServer) storeAction(req *TraceRequest, rep *TraceResponse) error
 	if err != nil {
 		return err
 	}
-	key := actionCacheKey(req, rep.Hashes)
+	key := actionCacheKey(req, rep.Files)
 
 	return s.ac.Put(key, val)
 }

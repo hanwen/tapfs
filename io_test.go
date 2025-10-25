@@ -59,7 +59,7 @@ func TestBasic(t *testing.T) {
 			"file3": OpRead,
 			"file4": OpCreate,
 		},
-		Hashes: map[string]Digest{
+		Files: map[string]Digest{
 			"file1": sha256hex("xx\n"),
 			"file3": sha256hex("z"),
 			"file4": sha256hex("y\n"),
@@ -97,7 +97,7 @@ func TestCache(t *testing.T) {
 			"file1": OpRead,
 			"file2": OpCreate,
 		},
-		Hashes: map[string]Digest{
+		Files: map[string]Digest{
 			"file1": sha256hex("x"),
 			"file2": sha256hex("x"),
 		},
