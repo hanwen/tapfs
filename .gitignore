@@ -1,3 +1,5 @@
 *~
 tapfs-server
 tapfs-wrapper
+cmd/tapfs-wrapper/tapfs-wrapper
+cmd/tapfs-server/tapfs-server
