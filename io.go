@@ -400,7 +400,7 @@ func nodeAt(n *fs.Inode, path string) (*fs.Inode, string) {
 
 func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
 	err = func() error {
-		full := filepath.Join(s.root.LoopbackNode.RootData.Path, path)
+		full := filepath.Join(s.mountPoint, path)
 		if _, err := os.Lstat(full); err != nil {
 			return err
 		}
