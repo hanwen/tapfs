@@ -20,7 +20,7 @@ func TestBasic(t *testing.T) {
 	mnt := t.TempDir()
 
 	root, err := fs.NewLoopbackRoot(orig)
-	debug := true
+	debug := false
 
 	cas := NewMemCAS(sha256.New)
 	ac := NewMemActionCache()
@@ -141,6 +141,11 @@ func TestCacheDir(t *testing.T) {
 
 	os.Remove(mnt + "/build/file")
 	os.Remove(mnt + "/build")
+	// Mimick Ninja, which will rebuild the non-existent (failed stat) file.
+	if _, err := os.Lstat(mnt + "/build"); err == nil {
+		t.Fatal("stat should have failed")
+	}
+
 	_, err = ClientRun(server.Addr(), cmd, nil, mnt, true)
 	if err != nil {
 		t.Fatal(err)

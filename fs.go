@@ -56,6 +56,14 @@ func (r *TapFSRoot) registerPGID(pgid int) *openData {
 	return od
 }
 
+func (r *TapFSRoot) removeRecord(pgid int) *openData {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	od := r.openDataByPGID[pgid]
+	delete(r.openDataByPGID, pgid)
+	return od
+}
+
 func parentPID(pid int) int {
 	f, err := os.Open(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
@@ -115,14 +123,6 @@ type TapFSRoot struct {
 	mu             sync.Mutex
 	lastID         int64
 	openDataByPGID map[int]*openData
-}
-
-func (r *TapFSRoot) removeRecord(pgid int) *openData {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	od := r.openDataByPGID[pgid]
-	delete(r.openDataByPGID, pgid)
-	return od
 }
 
 func (r *TapFSRoot) Access(ctx context.Context, mask uint32) syscall.Errno {

@@ -52,12 +52,13 @@ func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCa
 
 	sec := time.Second
 	fsServer, err := fs.Mount(mntDir, tapRoot, &fs.Options{
-		MountOptions:    fuse.MountOptions{Debug: Debug},
-		UID:             uint32(os.Getuid()),
-		GID:             uint32(os.Getgid()),
-		EntryTimeout:    &sec,
-		AttrTimeout:     &sec,
-		NegativeTimeout: &sec,
+		MountOptions: fuse.MountOptions{Debug: Debug},
+		UID:          uint32(os.Getuid()),
+		GID:          uint32(os.Getgid()),
+		EntryTimeout: &sec,
+		AttrTimeout:  &sec,
+		// not allowed for loopback based FS.
+		NegativeTimeout: nil,
 	})
 	if err != nil {
 		return nil, err
@@ -210,6 +211,9 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 
 func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	od := s.root.removeRecord(req.PGID)
+	if od == nil {
+		return fmt.Errorf("no trace for pgid %d", req.PGID)
+	}
 	rep.ID = od.id
 	rep.Files = map[string]FileInfo{}
 	rep.Operations = map[string]Operation{}
@@ -444,7 +448,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 		}
 		h, err := s.hashForPath(in)
 		if err != nil {
-			return nil
+			return acNotFound
 		}
 
 		if h != inH {
@@ -452,7 +456,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 			return nil
 		}
 	}
-	log.Printf("cache hit for: %s", req.Command)
+	log.Printf("cache hit for: %s (pgid %d)", req.Command, req.PGID)
 
 	rep.CacheHit = &CacheHit{
 		Stderr: val.Stderr,
@@ -463,7 +467,6 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 }
 
 func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
-	var wg sync.WaitGroup
 	for out, fileInfo := range val.Outputs {
 		r, err := s.cas.Get(fileInfo.Digest)
 		if err != nil {
@@ -492,18 +495,12 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 			return err
 		}
 
-		wg.Add(1)
-		go func(p string) {
-			_, err := os.Lstat(filepath.Join(s.mountPoint, p))
-			if err != nil {
-				log.Printf("lstat refresh %s: %v", p, err)
-			}
-			wg.Done()
-		}(out)
-
+		// Make the create kernel the FUSE node.
+		if _, err := os.Lstat(filepath.Join(s.mountPoint, out)); err != nil {
+			return fmt.Errorf("lstat refresh %s: %v", out, err)
+		}
 		r.Close()
 	}
-	wg.Wait()
 
 	rootInode := s.root.EmbeddedInode()
 	for out, fileInfo := range val.Outputs {
