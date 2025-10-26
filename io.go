@@ -367,7 +367,7 @@ func (s *CommandServer) storeAction(req *TraceRequest, rep *TraceResponse) error
 
 var acNotFound = errors.New("action cache not found")
 
-func nodeAt(n *fs.Inode, path string) *fs.Inode {
+func nodeAt(n *fs.Inode, path string) (*fs.Inode, string) {
 	for n != nil && len(path) > 0 {
 		idx := strings.Index(path, "/")
 		var comp string
@@ -381,19 +381,19 @@ func nodeAt(n *fs.Inode, path string) *fs.Inode {
 
 		n = n.GetChild(comp)
 	}
-	return n
+	return n, path
 }
 
 func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
 	err = func() error {
-		full := filepath.Join(s.mountPoint, path)
+		full := filepath.Join(s.root.LoopbackNode.RootData.Path, path)
 		if _, err := os.Lstat(full); err != nil {
 			return err
 		}
 
-		n := nodeAt(s.root.EmbeddedInode(), path)
-		if n == nil {
-			return fmt.Errorf("can't traverse %q", path)
+		n, left := nodeAt(s.root.EmbeddedInode(), path)
+		if left != "" || n == nil {
+			return fmt.Errorf("can't traverse %q: %q / %q", path, n.Path(nil), left)
 		}
 		if tf, ok := n.Operations().(*TapFSNode); ok {
 			fi, err = tf.GetFileInfo(s.cas)
@@ -484,7 +484,10 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 
 		wg.Add(1)
 		go func(p string) {
-			os.Lstat(filepath.Join(s.mountPoint, p))
+			_, err := os.Lstat(filepath.Join(s.mountPoint, p))
+			if err != nil {
+				log.Printf("lstat refresh %s: %v", p, err)
+			}
 			wg.Done()
 		}(out)
 
@@ -494,9 +497,9 @@ func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 
 	rootInode := s.root.EmbeddedInode()
 	for out, fileInfo := range val.Outputs {
-		ch := nodeAt(rootInode, out)
+		ch, left := nodeAt(rootInode, out)
 		if ch == nil {
-			log.Printf("path %q no child", out)
+			log.Printf("path %q no child: node nil, left %s", out, left)
 			continue
 		}
 		tf := ch.Operations().(*TapFSNode)
