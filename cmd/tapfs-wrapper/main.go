@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Getwd", err)
 	}
-	rep, err := tapfs.ClientRun(sock, *c, os.Environ(), wd)
+	rep, err := tapfs.ClientRun(sock, *c, os.Environ(), wd, true)
 	if err != nil {
 		log.Fatalf("ClientRun: %v", err)
 	}

@@ -3,7 +3,6 @@ package tapfs
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,9 +30,8 @@ type CommandServer struct {
 	root       *TapFSRoot
 	mountPoint string
 	FSServer   *fuse.Server
-	depDir     string
-	cas        *CAS
-	ac         *ActionCache
+	cas        CAS
+	ac         ActionCache
 	mu         sync.Mutex
 	Debug      bool
 	debugLog   io.WriteCloser
@@ -49,7 +47,7 @@ func (c *CommandServer) Wait() {
 
 const socketName = ".tapfs"
 
-func NewCommandServer(root fs.InodeEmbedder, mntDir, dbDir string, Debug bool) (*CommandServer, error) {
+func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCache, Debug bool) (*CommandServer, error) {
 	tapRoot := NewTapFS(root.(*fs.LoopbackNode))
 
 	sec := time.Second
@@ -72,24 +70,18 @@ func NewCommandServer(root fs.InodeEmbedder, mntDir, dbDir string, Debug bool) (
 	if err != nil {
 		return nil, err
 	}
-	depDir := filepath.Join(dbDir, "deps")
-	casDir := filepath.Join(dbDir, "cas")
-	os.MkdirAll(depDir, 0755)
-	os.MkdirAll(casDir, 0755)
 
 	ch := tapRoot.NewPersistentInode(context.Background(), &fs.MemSymlink{
 		Data: []byte(sock),
 	}, fs.StableAttr{Mode: fuse.S_IFLNK})
 	tapRoot.AddChild(socketName, ch, true)
-	cas := NewCAS(casDir, sha256.New)
 
 	commandServer := &CommandServer{
 		FSServer:   fsServer,
 		mountPoint: mntDir,
 		root:       tapRoot,
 		cas:        cas,
-		ac:         NewActionCache(),
-		depDir:     depDir,
+		ac:         ac,
 		Debug:      Debug,
 		listener:   l,
 	}
@@ -133,6 +125,9 @@ type TraceRequest struct {
 	DeclaredInputs  []string
 	DeclaredOutputs []string
 
+	// StartTrace: try to populate from cache, endtrace: try to store cache.
+	Cache bool
+
 	// Only for EndTrace
 	Stdout   []byte
 	Stderr   []byte
@@ -158,8 +153,7 @@ type FileInfo struct {
 
 type TraceResponse struct {
 	// only populated for EndTrace
-	ID     string
-	DepDir string
+	ID string
 
 	Files      map[string]FileInfo
 	Operations map[string]Operation
@@ -182,24 +176,27 @@ type JSONOpenData struct {
 }
 
 func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error {
-	if err := s.checkActionCache(req, rep); err == nil {
-		return nil
-	} else if err == acNotFound {
-		// nothing
-	} else {
-		return err
+	if req.Cache {
+		if err := s.checkActionCache(req, rep); err == nil {
+			return nil
+		} else if err == acNotFound {
+			// nothing
+		} else {
+			return err
+		}
 	}
 
 	od := s.root.registerPGID(req.PGID)
 
-	if s.Debug {
+	if s.Debug && false {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
 		if s.debugLog != nil {
 			log.Printf("already have a debug log. Are you using -j1 ?")
 		} else {
-			f, err := os.Create(filepath.Join(s.depDir, fmt.Sprintf("%s.log", od.id)))
+			depDir := ""
+			f, err := os.Create(filepath.Join(depDir, fmt.Sprintf("%s.log", od.id)))
 			if err != nil {
 				return err
 			}
@@ -214,7 +211,6 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 	od := s.root.removeRecord(req.PGID)
 	rep.ID = od.id
-	rep.DepDir = s.depDir
 	rep.Files = map[string]FileInfo{}
 	rep.Operations = map[string]Operation{}
 	for n, op := range od.ops {
@@ -235,7 +231,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		rep.Operations[path] = OpDelete
 	}
 
-	if s.Debug {
+	if s.Debug && false {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.debugLog != nil {
@@ -247,7 +243,17 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		}
 	}
 
-	fn := filepath.Join(s.depDir, od.id) + ".json"
+	if req.ExitCode == 0 && req.Cache {
+		if err := s.storeAction(req, rep); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *CommandServer) writeJson(od *openData, req *TraceRequest, rep *TraceResponse) error {
+	depDir := ""
+	fn := filepath.Join(depDir, od.id) + ".json"
 
 	jsonOD := JSONOpenData{
 		ID:      rep.ID,
@@ -277,9 +283,6 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		return err
 	}
 
-	if req.ExitCode == 0 {
-		s.storeAction(req, rep)
-	}
 	return nil
 }
 
@@ -296,7 +299,7 @@ func newSocket() (net.Listener, string, error) {
 var ioRegex = regexp.MustCompile(`^ninja_inputs='([^']*)'; ninja_outputs='([^']*)'; `)
 
 // Runs a command on the server for use in the command-line program
-func ClientRun(socket string, commandline string, env []string, dir string) (*TraceResponse, error) {
+func ClientRun(socket string, commandline string, env []string, dir string, cache bool) (*TraceResponse, error) {
 	client, err := rpc.Dial("unix", socket)
 	if err != nil {
 		return nil, err
@@ -308,7 +311,8 @@ func ClientRun(socket string, commandline string, env []string, dir string) (*Tr
 	}
 
 	req := TraceRequest{
-		PGID: pid,
+		PGID:  pid,
+		Cache: cache,
 	}
 
 	groups := ioRegex.FindStringSubmatch(commandline)
@@ -370,16 +374,22 @@ var acNotFound = errors.New("action cache not found")
 func nodeAt(n *fs.Inode, path string) (*fs.Inode, string) {
 	for n != nil && len(path) > 0 {
 		idx := strings.Index(path, "/")
-		var comp string
+		var comp, nextPath string
 		if idx > 0 {
 			comp = path[:idx]
-			path = path[idx+1:]
+			nextPath = path[idx+1:]
 		} else {
 			comp = path
-			path = ""
+			nextPath = ""
 		}
 
-		n = n.GetChild(comp)
+		next := n.GetChild(comp)
+		if next == nil {
+			return n, path
+		}
+
+		n = next
+		path = nextPath
 	}
 	return n, path
 }
@@ -413,7 +423,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 	for _, in := range req.DeclaredInputs {
 		h, err := s.hashForPath(in)
 		if err != nil {
-			return fmt.Errorf("checkActionCache: %v", err)
+			return acNotFound
 		}
 		inHash[in] = h
 	}

@@ -1,7 +1,12 @@
 package tapfs
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -46,22 +51,65 @@ func actionCacheValue(req *TraceRequest, rep *TraceResponse) (*ActionCacheValue,
 	return e, nil
 }
 
-type ActionCache struct {
+type ActionCache interface {
+	Put(key string, val *ActionCacheValue) error
+	Get(key string) (*ActionCacheValue, error)
+}
+
+type memActionCache struct {
 	// TODO serialize (sqlite?)
 	cache map[string]*ActionCacheValue
 }
 
-func NewActionCache() *ActionCache {
-	return &ActionCache{
+func NewMemActionCache() *memActionCache {
+	return &memActionCache{
 		cache: map[string]*ActionCacheValue{},
 	}
 }
 
-func (ac *ActionCache) Put(key string, val *ActionCacheValue) error {
+func (ac *memActionCache) Put(key string, val *ActionCacheValue) error {
 	ac.cache[key] = val
 	return nil
 }
 
-func (ac *ActionCache) Get(key string) (*ActionCacheValue, error) {
+func (ac *memActionCache) Get(key string) (*ActionCacheValue, error) {
 	return ac.cache[key], nil
+}
+
+type diskActionCache struct {
+	dir string
+}
+
+func NewDiskActionCache(dir string) *diskActionCache {
+	return &diskActionCache{dir}
+}
+
+func sha256hex(s string) Digest {
+	h := sha256.New()
+	io.WriteString(h, s)
+	return Digest{fmt.Sprintf("%x", h.Sum(nil)), uint64(len(s))}
+}
+
+func (ac *diskActionCache) Put(key string, val *ActionCacheValue) error {
+	k := sha256hex(key)
+	valBytes, err := json.Marshal(val)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(ac.dir, k.Hash), valBytes, 0644)
+}
+
+func (ac *diskActionCache) Get(key string) (*ActionCacheValue, error) {
+	k := sha256hex(key)
+	c, err := os.ReadFile(filepath.Join(ac.dir, k.Hash))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	var val ActionCacheValue
+	if err := json.Unmarshal(c, &val); err != nil {
+		return nil, err
+	}
+
+	return &val, nil
 }

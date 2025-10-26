@@ -25,8 +25,8 @@ cd ninja
 git worktree add ../ninja-test
 
 # Start server (other terminal)
-(cd $TAPFS && rm -rf ~/tmp/tapfs-db/ && mkdir ~/tmp/tapfs-db && mkdir -p /tmp/x && \
-    fusermount -z -u /tmp/x ; go build ./cmd/tapfs-wrapper/ && \
+(cd $TAPFS && rm -rf ~/tmp/tapfs-db/ && mkdir ~/tmp/tapfs-db && \
+    fusermount -z -u /tmp/x ; mkdir -p /tmp/x && go build ./cmd/tapfs-wrapper/ && \
     go build ./cmd/tapfs-server/ && \
     ./tapfs-server --backing ~/vc/ninja-build/ninja-test/  --database ~/tmp/tapfs-db/ /tmp/x )
 

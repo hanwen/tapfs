@@ -91,6 +91,10 @@ func (od *openData) record(node *fs.Inode, path string, op Operation) {
 	defer od.mu.Unlock()
 
 	if op == OpDelete {
+		if node != nil && od.ops[node] == OpCreate {
+			delete(od.ops, node)
+			return
+		}
 		od.deletions[path] = struct{}{}
 		return
 	}
@@ -143,7 +147,7 @@ type TapFSNode struct {
 	fileInfo FileInfo
 }
 
-func (n *TapFSNode) GetFileInfo(cas *CAS) (FileInfo, error) {
+func (n *TapFSNode) GetFileInfo(cas CAS) (FileInfo, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
@@ -272,21 +276,27 @@ func (n *TapFSNode) Create(ctx context.Context, name string, flags uint32, mode 
 }
 
 func (n *TapFSNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	child := n.GetChild(name)
 	errno := n.LoopbackNode.Unlink(ctx, name)
 	if errno == 0 {
-		n.root().openData(context2pgid(ctx)).record(nil, filepath.Join(n.Path(nil), name), OpDelete)
+		n.root().openData(context2pgid(ctx)).record(child, filepath.Join(n.Path(nil), name), OpDelete)
 	}
 	return errno
 }
 
 func (n *TapFSNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
-	child := n.GetChild(name)
+	src := n.GetChild(name)
+	dest := newParent.EmbeddedInode().GetChild(newName)
 	errno := n.LoopbackNode.Rename(ctx, name, newParent, newName, flags)
 	if errno == 0 {
 		od := n.root().openData(context2pgid(ctx))
 
-		od.record(nil, filepath.Join(n.Path(nil), name), OpDelete)
-		od.record(child, "", OpCreate)
+		if dest != nil {
+			od.record(src, "", OpUpdate)
+		} else {
+			// if src was not created, this should be something else
+			od.record(src, "", OpCreate)
+		}
 	}
 	return errno
 }
