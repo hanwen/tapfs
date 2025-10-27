@@ -139,3 +139,33 @@ func NewLoopbackTapFS(root *fs.LoopbackNode, data *tapFSData) *loopbackTapFSNode
 	}
 	return tapRoot
 }
+
+func (n *loopbackTapFSNode) fromActionCache(val *ActionCacheValue) error {
+	for out, fileInfo := range val.Outputs {
+		if err := n.tapFSData.loopbackHashCache.copyTo(
+			filepath.Join(n.RootData.Path, out),
+			fileInfo.Digest, fileInfo.Type); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (n *loopbackTapFSNode) hashForPath(path string) (fi FileInfo, err error) {
+	full := filepath.Join(n.RootData.Path, path)
+	var st syscall.Stat_t
+	if err := syscall.Lstat(full, &st); err != nil {
+		return fi, err
+	}
+
+	fi.Digest, err = n.tapFSData.loopbackHashCache.hashForPath(full, &st)
+	if err != nil {
+		return fi, err
+	}
+
+	if st.Mode&0111 != 0 {
+		fi.Type = FileExecutable
+	}
+	return fi, err
+}

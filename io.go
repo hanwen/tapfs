@@ -24,10 +24,15 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
+type fsAPI interface {
+	hashForPath(path string) (FileInfo, error)
+	fromActionCache(*ActionCacheValue) error
+}
+
 // CommandServer serves RPC calls
 type CommandServer struct {
 	tapFSData  *tapFSData
-	root       *loopbackTapFSNode
+	root       fsAPI
 	mountPoint string
 	FSServer   *fuse.Server
 	cas        CAS
@@ -215,7 +220,7 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 		path := n.Path(nil)
 		delete(od.deletions, path)
 
-		fi, err := s.hashForPath(path)
+		fi, err := s.root.hashForPath(path)
 		if err != nil {
 			return err
 		}
@@ -353,34 +358,10 @@ func nodeAt(n *fs.Inode, path string) (*fs.Inode, string) {
 	return n, path
 }
 
-func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
-	err = func() error {
-		full := filepath.Join(s.mountPoint, path)
-		if _, err := os.Lstat(full); err != nil {
-			return err
-		}
-
-		n, left := nodeAt(s.root.EmbeddedInode(), path)
-		if left != "" || n == nil {
-			return fmt.Errorf("can't traverse %q: %q / %q", path, n.Path(nil), left)
-		}
-		if tf, ok := n.Operations().(*loopbackTapFSNode); ok {
-			fi, err = tf.GetFileInfo(s.cas)
-			if err != nil {
-				return err
-			}
-			return nil
-		}
-
-		return fmt.Errorf("not a TapFSNode")
-	}()
-	return fi, err
-}
-
 func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) error {
 	inHash := map[string]FileInfo{}
 	for _, in := range req.DeclaredInputs {
-		h, err := s.hashForPath(in)
+		h, err := s.root.hashForPath(in)
 		if err != nil {
 			return acNotFound
 		}
@@ -401,7 +382,7 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 		if _, ok := inHash[in]; ok {
 			continue
 		}
-		h, err := s.hashForPath(in)
+		h, err := s.root.hashForPath(in)
 		if err != nil {
 			return acNotFound
 		}
@@ -411,24 +392,15 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 			return nil
 		}
 	}
-	log.Printf("cache hit for: %s (pgid %d)", req.Command, req.PGID)
 
 	rep.CacheHit = &CacheHit{
 		Stderr: val.Stderr,
 		Stdout: val.Stdout,
 	}
 
-	return s.fromActionCache(val)
-}
-
-func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
-	for out, fileInfo := range val.Outputs {
-		if err := s.tapFSData.loopbackHashCache.copyTo(
-			filepath.Join(s.root.RootData.Path, out),
-			fileInfo.Digest, fileInfo.Type); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	start := time.Now()
+	err = s.root.fromActionCache(val)
+	dt := time.Now().Sub(start)
+	log.Printf("cache hit for: %s (pgid %d), took %v to populate", req.Command, req.PGID, dt)
+	return err
 }

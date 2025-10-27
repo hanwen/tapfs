@@ -196,7 +196,7 @@ func TestFileHash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := server.root.GetChild("file").Operations().(*loopbackTapFSNode).GetFileInfo(cas)
+	got, err := server.root.(*loopbackTapFSNode).GetChild("file").Operations().(*loopbackTapFSNode).GetFileInfo(cas)
 	if err != nil {
 		t.Fatal(err)
 	}

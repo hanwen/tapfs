@@ -90,6 +90,16 @@ func (s *localDiskDigestCache) copyTo(path string, digest Digest, typ FileType) 
 		return err
 	}
 
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
+		return err
+	}
+
+	var key loopbackHashKey
+	key.FromStat(&st)
+	s.mu.Lock()
+	s.cache[key] = digest
+	s.mu.Unlock()
 	if err := f.Close(); err != nil {
 		return err
 	}
