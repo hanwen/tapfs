@@ -1,6 +1,7 @@
 package tapfs
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,17 +36,27 @@ func (s *localDiskDigestCache) hashForPath(p string, st *syscall.Stat_t) (digest
 		s.mu.Unlock()
 
 		if !ok {
-			f, err := os.Open(p)
+			src, err := os.Open(p)
 			if err != nil {
 				return err
 			}
 
-			digest, err = CASAdd(s.cas, f)
-			f.Close()
+			fi, err := src.Stat()
 			if err != nil {
 				return err
 			}
+			w, err := s.cas.NewWriter(fi.Size())
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(w, src); err != nil {
+				return err
+			}
+			if err := w.Close(); err != nil {
+				return err
+			}
 
+			digest = w.Digest()
 			s.mu.Lock()
 			s.cache[key] = digest
 			s.mu.Unlock()
@@ -72,7 +83,9 @@ func (s *localDiskDigestCache) copyTo(path string, digest Digest, typ FileType) 
 	if err != nil {
 		return err
 	}
-
+	if r == nil {
+		return fmt.Errorf("digest not in cache: %#v", digest)
+	}
 	mode := 0644
 	switch typ {
 	case FileExecutable:

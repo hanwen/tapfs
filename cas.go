@@ -27,7 +27,7 @@ type CASWriter interface {
 type CAS interface {
 	Has(Digest) bool
 	Get(Digest) (io.ReadCloser, error)
-	NewWriter() (CASWriter, error)
+	NewWriter(size int64) (CASWriter, error)
 }
 
 type memCAS struct {
@@ -68,12 +68,16 @@ func (c *memCAS) Get(d Digest) (io.ReadCloser, error) {
 
 type memCASWriter struct {
 	io.Writer
-	buf  *bytes.Buffer
-	hash hash.Hash
-	cas  *memCAS
+	buf          *bytes.Buffer
+	hash         hash.Hash
+	cas          *memCAS
+	expectedSize int64
 }
 
 func (w *memCASWriter) Close() error {
+	if w.expectedSize >= 0 && w.expectedSize != int64(w.buf.Len()) {
+		return fmt.Errorf("got %d want %d", w.buf.Len(), w.expectedSize)
+	}
 	d := w.Digest()
 
 	w.cas.mu.Lock()
@@ -89,16 +93,17 @@ func (w *memCASWriter) Digest() Digest {
 	}
 }
 
-func (c *memCAS) NewWriter() (CASWriter, error) {
+func (c *memCAS) NewWriter(expectedSize int64) (CASWriter, error) {
 	h := c.newhash()
 	buf := &bytes.Buffer{}
 	m := io.MultiWriter(h, buf)
 
 	return &memCASWriter{
-		Writer: m,
-		buf:    buf,
-		hash:   h,
-		cas:    c,
+		Writer:       m,
+		buf:          buf,
+		hash:         h,
+		cas:          c,
+		expectedSize: expectedSize,
 	}, nil
 }
 
@@ -138,15 +143,16 @@ func (c *diskCAS) Get(d Digest) (io.ReadCloser, error) {
 
 type diskCasWriter struct {
 	io.Writer
-	dest *os.File
-	hash hash.Hash
-	size uint64
-	cas  *diskCAS
+	dest         *os.File
+	hash         hash.Hash
+	size         int64
+	expectedSize int64
+	cas          *diskCAS
 }
 
 func (w *diskCasWriter) Write(b []byte) (int, error) {
 	n, err := w.Writer.Write(b)
-	w.size += uint64(n)
+	w.size += int64(n)
 	return n, err
 }
 
@@ -154,6 +160,9 @@ func (w *diskCasWriter) Close() error {
 	err := w.dest.Close()
 	if err != nil {
 		return err
+	}
+	if w.expectedSize >= 0 && w.expectedSize != w.size {
+		return fmt.Errorf("got size %d want %d", w.size, w.expectedSize)
 	}
 
 	digest := w.Digest()
@@ -167,36 +176,18 @@ func (w *diskCasWriter) Close() error {
 func (w *diskCasWriter) Digest() Digest {
 	return Digest{
 		Hash: toHex(w.hash.Sum(nil)),
-		Size: w.size,
+		Size: uint64(w.size),
 	}
 }
 
-func (c *diskCAS) NewWriter() (CASWriter, error) {
+func (c *diskCAS) NewWriter(size int64) (CASWriter, error) {
 	f, err := os.CreateTemp(c.dir, "")
 	if err != nil {
 		return nil, err
 	}
 
-	cw := &diskCasWriter{dest: f, cas: c, hash: c.newhash()}
+	cw := &diskCasWriter{expectedSize: size,
+		dest: f, cas: c, hash: c.newhash()}
 	cw.Writer = io.MultiWriter(cw.hash, f)
 	return cw, nil
-}
-
-func CASAdd(c CAS, r io.Reader) (Digest, error) {
-	var dig Digest
-	err := func() error {
-		w, err := c.NewWriter()
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(w, r); err != nil {
-			return err
-		}
-		if err := w.Close(); err != nil {
-			return err
-		}
-		dig = w.Digest()
-		return nil
-	}()
-	return dig, err
 }
