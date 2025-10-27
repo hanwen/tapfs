@@ -27,15 +27,17 @@ import (
 
 // CommandServer serves RPC calls
 type CommandServer struct {
-	root       *TapFSRoot
+	tapFSData  *tapFSData
+	root       *loopbackTapFSNode
 	mountPoint string
 	FSServer   *fuse.Server
 	cas        CAS
 	ac         ActionCache
-	mu         sync.Mutex
-	Debug      bool
-	debugLog   io.WriteCloser
-	listener   net.Listener
+
+	Debug    bool
+	mu       sync.Mutex
+	debugLog io.WriteCloser
+	listener net.Listener
 }
 
 func (c *CommandServer) Close() error {
@@ -48,7 +50,9 @@ func (c *CommandServer) Wait() {
 const socketName = ".tapfs"
 
 func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCache, Debug bool) (*CommandServer, error) {
-	tapRoot := NewTapFS(root.(*fs.LoopbackNode))
+	tapFSData := newTapFSData(cas)
+	tapFSData.registerPGID(1)
+	tapRoot := NewLoopbackTapFS(root.(*fs.LoopbackNode), tapFSData)
 
 	sec := time.Second
 	fsServer, err := fs.Mount(mntDir, tapRoot, &fs.Options{
@@ -78,6 +82,7 @@ func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCa
 	tapRoot.AddChild(socketName, ch, true)
 
 	commandServer := &CommandServer{
+		tapFSData:  tapFSData,
 		FSServer:   fsServer,
 		mountPoint: mntDir,
 		root:       tapRoot,
@@ -187,7 +192,7 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 		}
 	}
 
-	od := s.root.registerPGID(req.PGID)
+	od := s.tapFSData.registerPGID(req.PGID)
 
 	if s.Debug && false {
 		s.mu.Lock()
@@ -210,7 +215,7 @@ func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error 
 }
 
 func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
-	od := s.root.removeRecord(req.PGID)
+	od := s.tapFSData.removeRecord(req.PGID)
 	if od == nil {
 		return fmt.Errorf("no trace for pgid %d", req.PGID)
 	}
@@ -246,7 +251,6 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 			log.Printf("EndTrace called, but debugLog == nil")
 		}
 	}
-
 	if req.ExitCode == 0 && req.Cache {
 		if err := s.storeAction(req, rep); err != nil {
 			return err
@@ -409,7 +413,7 @@ func (s *CommandServer) hashForPath(path string) (fi FileInfo, err error) {
 		if left != "" || n == nil {
 			return fmt.Errorf("can't traverse %q: %q / %q", path, n.Path(nil), left)
 		}
-		if tf, ok := n.Operations().(*TapFSNode); ok {
+		if tf, ok := n.Operations().(*loopbackTapFSNode); ok {
 			fi, err = tf.GetFileInfo(s.cas)
 			if err != nil {
 				return err
@@ -468,51 +472,11 @@ func (s *CommandServer) checkActionCache(req *TraceRequest, rep *TraceResponse) 
 
 func (s *CommandServer) fromActionCache(val *ActionCacheValue) error {
 	for out, fileInfo := range val.Outputs {
-		r, err := s.cas.Get(fileInfo.Digest)
-		if err != nil {
+		if err := s.tapFSData.loopbackHashCache.copyTo(
+			filepath.Join(s.root.RootData.Path, out),
+			fileInfo.Digest, fileInfo.Type); err != nil {
 			return err
 		}
-
-		mode := 0644
-		switch fileInfo.Type {
-		case FileExecutable:
-			mode = 0755
-		}
-		orig := filepath.Join(s.root.RootData.Path, out)
-		if err := os.MkdirAll(filepath.Dir(orig), 0755); err != nil {
-			return err
-		}
-		f, err := os.OpenFile(orig, os.O_CREATE|os.O_WRONLY, os.FileMode(mode))
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		if _, err := io.Copy(f, r); err != nil {
-			return err
-		}
-
-		if err := f.Close(); err != nil {
-			return err
-		}
-
-		// Make the create kernel the FUSE node.
-		if _, err := os.Lstat(filepath.Join(s.mountPoint, out)); err != nil {
-			return fmt.Errorf("lstat refresh %s: %v", out, err)
-		}
-		r.Close()
-	}
-
-	rootInode := s.root.EmbeddedInode()
-	for out, fileInfo := range val.Outputs {
-		ch, left := nodeAt(rootInode, out)
-		if ch == nil {
-			log.Printf("path %q no child: node nil, left %s", out, left)
-			continue
-		}
-		tf := ch.Operations().(*TapFSNode)
-		tf.mu.Lock()
-		tf.fileInfo = fileInfo
-		tf.mu.Unlock()
 	}
 
 	return nil

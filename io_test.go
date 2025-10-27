@@ -58,7 +58,7 @@ func TestBasic(t *testing.T) {
 	}
 }
 
-func TestCache(t *testing.T) {
+func TestCacheBasic(t *testing.T) {
 	orig := t.TempDir()
 	mnt := t.TempDir()
 
@@ -77,6 +77,10 @@ func TestCache(t *testing.T) {
 	got, err := ClientRun(server.Addr(), cmd, nil, mnt, true)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	if len(ac.cache) != 1 {
+		t.Fatal("action store failed")
 	}
 
 	want := &TraceResponse{
@@ -161,7 +165,7 @@ func TestCacheDeletion(t *testing.T) {
 	root, err := fs.NewLoopbackRoot(orig)
 	cas := NewMemCAS(sha256.New)
 	ac := NewMemActionCache()
-	server, err := NewCommandServer(root, mnt, cas, ac, true)
+	server, err := NewCommandServer(root, mnt, cas, ac, false)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -170,5 +174,39 @@ func TestCacheDeletion(t *testing.T) {
 	cmd := `echo x  > t; cp t t2 ; rm t; mv t2 t3`
 	if _, err := ClientRun(server.Addr(), cmd, nil, mnt, true); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFileHash(t *testing.T) {
+	orig := t.TempDir()
+	mnt := t.TempDir()
+
+	os.WriteFile(orig+"/file1", []byte("x"), 0644)
+
+	root, err := fs.NewLoopbackRoot(orig)
+	cas := NewMemCAS(sha256.New)
+	ac := NewMemActionCache()
+	server, err := NewCommandServer(root, mnt, cas, ac, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer server.FSServer.Unmount()
+
+	if err := os.WriteFile(mnt+"/file", []byte("xyz"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := server.root.GetChild("file").Operations().(*loopbackTapFSNode).GetFileInfo(cas)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := FileInfo{
+		Digest: sha256hex("xyz"),
+		Type:   FileExecutable,
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("-want, +got: %s", diff)
 	}
 }
