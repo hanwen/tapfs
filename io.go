@@ -3,7 +3,6 @@ package tapfs
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -168,19 +167,6 @@ type TraceResponse struct {
 	CacheHit *CacheHit
 }
 
-type JSONOpenData struct {
-	ID      string
-	Command string
-	Dir     string
-
-	Read   []string
-	Create []string
-	Update []string
-	Delete []string
-
-	Hashes map[string]Digest
-}
-
 func (s *CommandServer) StartTrace(req *TraceRequest, rep *TraceResponse) error {
 	if req.Cache {
 		if err := s.checkActionCache(req, rep); err == nil {
@@ -256,41 +242,6 @@ func (s *CommandServer) EndTrace(req *TraceRequest, rep *TraceResponse) error {
 			return err
 		}
 	}
-	return nil
-}
-
-func (s *CommandServer) writeJson(od *openData, req *TraceRequest, rep *TraceResponse) error {
-	depDir := ""
-	fn := filepath.Join(depDir, od.id) + ".json"
-
-	jsonOD := JSONOpenData{
-		ID:      rep.ID,
-		Command: req.Command,
-		Dir:     req.Dir,
-		Hashes:  map[string]Digest{},
-	}
-	for path, f := range rep.Files {
-		jsonOD.Hashes[path] = f.Digest
-	}
-	dests := map[Operation]*[]string{
-		OpRead:   &jsonOD.Read,
-		OpCreate: &jsonOD.Create,
-		OpUpdate: &jsonOD.Update,
-		OpDelete: &jsonOD.Delete,
-	}
-	for p, op := range rep.Operations {
-		*dests[op] = append(*dests[op], p)
-	}
-	for _, v := range dests {
-		sort.Strings(*v)
-	}
-
-	if data, err := json.Marshal(jsonOD); err != nil {
-		return err
-	} else if err := os.WriteFile(fn, data, 0644); err != nil {
-		return err
-	}
-
 	return nil
 }
 
