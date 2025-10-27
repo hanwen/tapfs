@@ -22,7 +22,7 @@ func TestBasic(t *testing.T) {
 	root, err := fs.NewLoopbackRoot(orig)
 	debug := false
 
-	cas := NewMemCAS(sha256.New)
+	cas := NewMemCAS(sha256.New, false)
 	ac := NewMemActionCache()
 	server, err := NewCommandServer(root, mnt, cas, ac, debug)
 	if err != nil {
@@ -65,7 +65,7 @@ func TestCacheBasic(t *testing.T) {
 	os.WriteFile(orig+"/file1", []byte("x"), 0644)
 
 	root, err := fs.NewLoopbackRoot(orig)
-	cas := NewMemCAS(sha256.New)
+	cas := NewMemCAS(sha256.New, false)
 	ac := NewMemActionCache()
 	server, err := NewCommandServer(root, mnt, cas, ac, false)
 	if err != nil {
@@ -130,7 +130,7 @@ func TestCacheDir(t *testing.T) {
 	os.WriteFile(orig+"/file1", []byte("x"), 0644)
 
 	root, err := fs.NewLoopbackRoot(orig)
-	cas := NewMemCAS(sha256.New)
+	cas := NewMemCAS(sha256.New, false)
 	ac := NewMemActionCache()
 	server, err := NewCommandServer(root, mnt, cas, ac, false)
 	if err != nil {
@@ -163,7 +163,7 @@ func TestCacheDeletion(t *testing.T) {
 	os.WriteFile(orig+"/file1", []byte("x"), 0644)
 
 	root, err := fs.NewLoopbackRoot(orig)
-	cas := NewMemCAS(sha256.New)
+	cas := NewMemCAS(sha256.New, false)
 	ac := NewMemActionCache()
 	server, err := NewCommandServer(root, mnt, cas, ac, false)
 	if err != nil {
@@ -184,7 +184,7 @@ func TestFileHash(t *testing.T) {
 	os.WriteFile(orig+"/file1", []byte("x"), 0644)
 
 	root, err := fs.NewLoopbackRoot(orig)
-	cas := NewMemCAS(sha256.New)
+	cas := NewMemCAS(sha256.New, false)
 	ac := NewMemActionCache()
 	server, err := NewCommandServer(root, mnt, cas, ac, false)
 	if err != nil {

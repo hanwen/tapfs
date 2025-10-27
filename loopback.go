@@ -45,10 +45,7 @@ func (n *loopbackTapFSNode) GetFileInfo(cas CAS) (fi FileInfo, err error) {
 			return err
 		}
 
-		typ := FileRegular
-		if st.Mode&0111 != 0 {
-			typ = FileExecutable
-		}
+		typ := FileTypeFromMode(st.Mode)
 		fi = FileInfo{
 			Digest: digest,
 			Type:   typ,

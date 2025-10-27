@@ -20,11 +20,15 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/hanwen/grit/gritfs"
 )
 
 type fsAPI interface {
+	fs.InodeEmbedder
+
 	hashForPath(path string) (FileInfo, error)
 	fromActionCache(*ActionCacheValue) error
 }
@@ -56,7 +60,16 @@ const socketName = ".tapfs"
 func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCache, Debug bool) (*CommandServer, error) {
 	tapFSData := newTapFSData(cas)
 	tapFSData.registerPGID(1)
-	tapRoot := NewLoopbackTapFS(root.(*fs.LoopbackNode), tapFSData)
+
+	var tapRoot fsAPI
+	switch subtype := root.(type) {
+	case *fs.LoopbackNode:
+		tapRoot = NewLoopbackTapFS(subtype, tapFSData)
+	case *gritfs.RepoNode:
+		tapRoot = NewGritFSRoot(subtype, tapFSData)
+	default:
+		return nil, fmt.Errorf("unsupported root type %T", root)
+	}
 
 	sec := time.Second
 	fsServer, err := fs.Mount(mntDir, tapRoot, &fs.Options{
@@ -80,10 +93,10 @@ func NewCommandServer(root fs.InodeEmbedder, mntDir string, cas CAS, ac ActionCa
 		return nil, err
 	}
 
-	ch := tapRoot.NewPersistentInode(context.Background(), &fs.MemSymlink{
+	ch := tapRoot.EmbeddedInode().NewPersistentInode(context.Background(), &fs.MemSymlink{
 		Data: []byte(sock),
 	}, fs.StableAttr{Mode: fuse.S_IFLNK})
-	tapRoot.AddChild(socketName, ch, true)
+	tapRoot.EmbeddedInode().AddChild(socketName, ch, true)
 
 	commandServer := &CommandServer{
 		tapFSData:  tapFSData,
@@ -154,7 +167,33 @@ type FileType byte
 const (
 	FileRegular    = FileType(0)
 	FileExecutable = FileType(1)
+	FileSymlink    = FileType(2)
 )
+
+func (ft FileType) Mode() filemode.FileMode {
+	switch ft {
+	case FileRegular:
+		return filemode.Regular
+	case FileSymlink:
+		return filemode.Symlink
+	case FileExecutable:
+		return filemode.Executable
+	default:
+		log.Panicf("mode %o", ft)
+	}
+
+	return 0
+}
+
+func FileTypeFromMode(mode uint32) FileType {
+	if mode&^07777 == fuse.S_IFLNK {
+		return FileSymlink
+	}
+	if mode&0111 != 0 {
+		return FileExecutable
+	}
+	return FileRegular
+}
 
 type FileInfo struct {
 	Digest Digest

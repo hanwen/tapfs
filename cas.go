@@ -2,12 +2,16 @@ package tapfs
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"fmt"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/hanwen/grit/gritfs"
 )
 
 type Digest struct {
@@ -30,13 +34,15 @@ type CAS interface {
 }
 
 type memCAS struct {
+	git     bool
 	newhash func() hash.Hash
 	mu      sync.Mutex
 	cache   map[Digest][]byte
 }
 
-func NewMemCAS(n func() hash.Hash) *memCAS {
+func NewMemCAS(n func() hash.Hash, git bool) *memCAS {
 	return &memCAS{
+		git:     git,
 		newhash: n,
 		cache:   make(map[Digest][]byte),
 	}
@@ -59,11 +65,15 @@ func (c *memCAS) Get(d Digest) (io.ReadCloser, error) {
 }
 
 type memCASWriter struct {
-	io.Writer
 	buf          *bytes.Buffer
 	hash         hash.Hash
 	cas          *memCAS
 	expectedSize int64
+}
+
+func (w *memCASWriter) Write(b []byte) (int, error) {
+	w.hash.Write(b)
+	return w.buf.Write(b)
 }
 
 func (w *memCASWriter) Close() error {
@@ -88,10 +98,11 @@ func (w *memCASWriter) Digest() Digest {
 func (c *memCAS) NewWriter(expectedSize int64) (CASWriter, error) {
 	h := c.newhash()
 	buf := &bytes.Buffer{}
-	m := io.MultiWriter(h, buf)
 
+	if c.git {
+		fmt.Fprintf(h, "blob %d\000", expectedSize)
+	}
 	return &memCASWriter{
-		Writer:       m,
 		buf:          buf,
 		hash:         h,
 		cas:          c,
@@ -102,26 +113,23 @@ func (c *memCAS) NewWriter(expectedSize int64) (CASWriter, error) {
 var _ = (CAS)((*diskCAS)(nil))
 
 type diskCAS struct {
-	dir string
-
+	dir      string
+	git      bool
 	newhash  func() hash.Hash
 	zeroHash string
 }
 
-func NewDiskCAS(dir string, newhash func() hash.Hash) *diskCAS {
-	z := fmt.Sprintf("%x", make([]byte, len(newhash().Sum(nil))))
+func NewDiskCAS(dir string, newhash func() hash.Hash, git bool) *diskCAS {
 	return &diskCAS{
-		dir:      dir,
-		newhash:  newhash,
-		zeroHash: z,
+		dir:     dir,
+		newhash: newhash,
+		git:     git,
 	}
 }
 
 func (c *diskCAS) path(d Digest) string {
 	return filepath.Join(c.dir, d.String())
 }
-
-func (c *diskCAS) Zero() Digest { return Digest{c.zeroHash, 0} }
 
 func (c *diskCAS) Get(d Digest) (io.ReadCloser, error) {
 	f, err := os.Open(c.path(d))
@@ -175,6 +183,75 @@ func (c *diskCAS) NewWriter(size int64) (CASWriter, error) {
 
 	cw := &diskCasWriter{expectedSize: size,
 		dest: f, cas: c, hash: c.newhash()}
+	if c.git {
+		fmt.Fprintf(cw.hash, "blob %d\000", size)
+	}
 	cw.Writer = io.MultiWriter(cw.hash, f)
 	return cw, nil
+}
+
+type gritCASAdapter struct {
+	cas     *gritfs.CAS
+	newHash func() hash.Hash
+}
+
+func NewGritCASAdapter(gc *gritfs.CAS) *gritCASAdapter {
+	return &gritCASAdapter{
+		cas:     gc,
+		newHash: sha1.New,
+	}
+}
+
+func (a *gritCASAdapter) Get(d Digest) (io.ReadCloser, error) {
+	h := plumbing.NewHash(d.Hash)
+
+	f, ok := a.cas.Open(h)
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+
+	return f, nil
+}
+
+type gritCASWriter struct {
+	*bytes.Buffer
+	hash hash.Hash
+	sz   int64
+	cas  *gritCASAdapter
+}
+
+func (w *gritCASWriter) Write(b []byte) (int, error) {
+	w.hash.Write(b)
+	return w.Buffer.Write(b)
+}
+
+func (w *gritCASWriter) Close() error {
+	if int64(w.Buffer.Len()) != w.sz {
+		return fmt.Errorf("mismatch %d %d", w.Buffer.Len(), w.sz)
+	}
+
+	var p plumbing.Hash
+	copy(p[:], w.hash.Sum(nil))
+	return w.cas.cas.Write(p, w.Bytes())
+}
+
+func (w *gritCASWriter) Digest() Digest {
+	return Digest{
+		Hash: toHex(w.hash.Sum(nil)),
+		Size: uint64(w.sz),
+	}
+}
+
+func (a *gritCASAdapter) NewWriter(expectedSize int64) (CASWriter, error) {
+	if expectedSize < 0 {
+		return nil, fmt.Errorf("git hash needs size")
+	}
+	h := sha1.New()
+	fmt.Fprintf(h, "blob %d\000", expectedSize)
+	return &gritCASWriter{
+		hash:   h,
+		sz:     expectedSize,
+		Buffer: bytes.NewBuffer(make([]byte, expectedSize)),
+		cas:    a,
+	}, nil
 }
