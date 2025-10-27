@@ -25,7 +25,6 @@ type CASWriter interface {
 }
 
 type CAS interface {
-	Has(Digest) bool
 	Get(Digest) (io.ReadCloser, error)
 	NewWriter(size int64) (CASWriter, error)
 }
@@ -41,13 +40,6 @@ func NewMemCAS(n func() hash.Hash) *memCAS {
 		newhash: n,
 		cache:   make(map[Digest][]byte),
 	}
-}
-
-func (c *memCAS) Has(d Digest) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.cache[d]
-	return ok
 }
 
 type bufCloser struct {
@@ -130,11 +122,6 @@ func (c *diskCAS) path(d Digest) string {
 }
 
 func (c *diskCAS) Zero() Digest { return Digest{c.zeroHash, 0} }
-
-func (c *diskCAS) Has(d Digest) bool {
-	fi, _ := os.Stat(c.path(d))
-	return fi != nil
-}
 
 func (c *diskCAS) Get(d Digest) (io.ReadCloser, error) {
 	f, err := os.Open(c.path(d))
